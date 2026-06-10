@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Build / runtime artifacts
+out/
+*.db
+*.sqlite3
+
+# Node (web/)
+node_modules/
+dist/
+
+# OS / editor
+.DS_Store

@@ -134,6 +134,8 @@ ABV_MATCH_CASES = [
     ("46.5", ["92 proof? no: 93 proof"], Outcome.EXACT),  # proof conversion
     ("13.5", ["ALC. 12.5% BY VOL"], Outcome.MISMATCH),
     ("13.5", ["fine red wine"], Outcome.MISSING),
+    # Implausible readings are OCR garbage -> doubt -> review, not fail.
+    ("13.5", ["ALC. 00% BY VOL"], Outcome.MISSING),
 ]
 
 
@@ -174,6 +176,17 @@ def test_format_checks_missing():
     assert v.outcome == Outcome.MISSING
     assert "not on form" in v.note
     assert format_check_net_contents(["just a brand name"]).outcome == Outcome.MISSING
+
+
+def test_format_check_abv_implausible_reading_is_review_not_fail():
+    v = format_check_abv(["ALC. 90% BY VOL table wine"])
+    assert v.outcome == Outcome.MISSING
+    assert "implausible" in v.note
+
+
+def test_format_check_abv_prefers_plausible_reading():
+    v = format_check_abv(["00% garbage then ALC. 13.5% BY VOL"])
+    assert v.outcome == Outcome.EXACT
 
 
 # --- aggregation --------------------------------------------------------------

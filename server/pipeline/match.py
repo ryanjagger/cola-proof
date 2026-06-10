@@ -72,7 +72,7 @@ def match_name(field: str, form_value: str, label_texts: list[str]) -> Verdict:
     needle = normalize_text(form_value)
     if not needle:
         return Verdict(field, form_value, None, Outcome.MISSING, note="empty form value")
-    best_score, best_text = 0.0, None
+    best_score, best_text, scattered = 0.0, None, False
     for text in label_texts:
         hay = normalize_text(text or "")
         if not hay:
@@ -81,15 +81,25 @@ def match_name(field: str, form_value: str, label_texts: list[str]) -> Verdict:
         if a is not None and a.score > best_score:
             best_score = a.score
             best_text = hay[a.dest_start : a.dest_end].strip()
+            scattered = False
+        # Names are often split across visual lines ("TOMMYROTTER" ...
+        # "DISTILLERY") so a contiguous window under-scores them;
+        # token_set_ratio scores the words regardless of adjacency.
+        ts = fuzz.token_set_ratio(needle, hay)
+        if ts > best_score:
+            best_score = ts
+            scattered = True
     # "(normalized)" is shown only when normalization did real work: the
     # form string never appears verbatim on the label.
     normalized = not any(form_value in (t or "") for t in label_texts)
+    note = "words found non-adjacent on label" if scattered else None
     if best_score >= EXACT_THRESHOLD:
-        return Verdict(field, form_value, best_text, Outcome.EXACT, best_score, normalized)
+        return Verdict(field, form_value, best_text, Outcome.EXACT, best_score, normalized, note)
     if best_score >= NEAR_THRESHOLD:
-        return Verdict(field, form_value, best_text, Outcome.NEAR_MISS, best_score, normalized)
-    if best_score > 50:
-        return Verdict(field, form_value, best_text, Outcome.MISMATCH, best_score, normalized)
+        return Verdict(field, form_value, best_text, Outcome.NEAR_MISS, best_score, normalized, note)
+    # Below the near band a fuzzy name score is noise: "different brand"
+    # and "unreadable label" are indistinguishable, so a name never
+    # hard-fails on OCR — it reads as not-found and goes to review.
     return Verdict(field, form_value, None, Outcome.MISSING, best_score)
 
 
@@ -173,6 +183,8 @@ _ABV_RE = re.compile(
     re.IGNORECASE,
 )
 
+_ABV_PLAUSIBLE = (0.5, 80.0)
+
 
 def parse_abv_all(text: str) -> list[tuple[float, str]]:
     """All ABV statements in the text. Proof converts to ABV."""
@@ -204,9 +216,15 @@ def match_abv(form_value: str, label_texts: list[str]) -> Verdict:
         )
     form_pct, _ = form_parsed
     found = [p for t in label_texts if t for p in parse_abv_all(t)]
-    if not found:
-        return Verdict("alcohol_content", form_value, None, Outcome.MISSING)
-    label_pct, label_str = min(found, key=lambda x: abs(x[0] - form_pct))
+    # An implausible reading ("00%", "90%") is OCR garbage, not evidence
+    # of a wrong label: only plausible candidates may drive a mismatch.
+    plausible = [p for p in found if _ABV_PLAUSIBLE[0] <= p[0] <= _ABV_PLAUSIBLE[1]]
+    if not plausible:
+        note = (
+            f"only implausible reading ({found[0][1]!r})" if found else None
+        )
+        return Verdict("alcohol_content", form_value, None, Outcome.MISSING, note=note)
+    label_pct, label_str = min(plausible, key=lambda x: abs(x[0] - form_pct))
     if abs(label_pct - form_pct) < 0.05:
         return Verdict(
             "alcohol_content", form_value, label_str, Outcome.EXACT, 100.0,
@@ -286,30 +304,29 @@ def match_class_type(description: str, label_texts: list[str]) -> Verdict:
 
 def format_check_abv(label_texts: list[str]) -> Verdict:
     """ABV present and plausible on the label (06-2016 forms)."""
-    found = [p for t in label_texts if t for p in [parse_abv(t)] if p]
-    if not found:
-        return Verdict("alcohol_content", None, None, Outcome.MISSING,
-                       note="not on form — format check only")
-    pct, label_str = found[0]
-    if 0.0 < pct <= 80.0:
-        return Verdict("alcohol_content", None, label_str, Outcome.EXACT, 100.0,
-                       note="not on form — format check only")
-    return Verdict("alcohol_content", None, label_str, Outcome.MISMATCH, 0.0,
-                   note=f"implausible ABV {pct}%")
+    found = [p for t in label_texts if t for p in parse_abv_all(t)]
+    plausible = [p for p in found if _ABV_PLAUSIBLE[0] <= p[0] <= _ABV_PLAUSIBLE[1]]
+    if plausible:
+        return Verdict("alcohol_content", None, plausible[0][1], Outcome.EXACT,
+                       100.0, note="not on form — format check only")
+    note = "not on form — format check only"
+    if found:
+        # Garbage readings are doubt, not evidence: review, never fail.
+        note += f"; only implausible reading ({found[0][1]!r})"
+    return Verdict("alcohol_content", None, None, Outcome.MISSING, note=note)
 
 
 def format_check_net_contents(label_texts: list[str]) -> Verdict:
     """Net contents present and plausible on the label (06-2016 forms)."""
-    found = [p for t in label_texts if t for p in [parse_net_contents(t)] if p]
-    if not found:
-        return Verdict("net_contents", None, None, Outcome.MISSING,
-                       note="not on form — format check only")
-    ml, label_str = found[0]
-    if 20.0 <= ml <= 200000.0:
-        return Verdict("net_contents", None, label_str, Outcome.EXACT, 100.0,
-                       note="not on form — format check only")
-    return Verdict("net_contents", None, label_str, Outcome.MISMATCH, 0.0,
-                   note=f"implausible volume {ml:.0f} ml")
+    found = [p for t in label_texts if t for p in parse_net_contents_all(t)]
+    plausible = [p for p in found if 20.0 <= p[0] <= 200000.0]
+    if plausible:
+        return Verdict("net_contents", None, plausible[0][1], Outcome.EXACT,
+                       100.0, note="not on form — format check only")
+    note = "not on form — format check only"
+    if found:
+        note += f"; only implausible reading ({found[0][1]!r})"
+    return Verdict("net_contents", None, None, Outcome.MISSING, note=note)
 
 
 # --- aggregation ----------------------------------------------------------

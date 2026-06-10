@@ -27,8 +27,10 @@ STATUTORY_BODY = (
 )
 
 # Body similarity at or above this is "almost the statutory text":
-# escalate / review rather than calling it absent.
-NEAR_THRESHOLD = 90.0
+# escalate / review rather than calling it absent. The band is wide
+# because OCR noise on dense small print routinely costs 10+ points and
+# a warning that is present-but-misread must escalate, not fail.
+NEAR_THRESHOLD = 80.0
 MISMATCH_THRESHOLD = 55.0
 
 
@@ -83,10 +85,11 @@ def validate_warning(text: str | None) -> WarningResult:
         return WarningResult(WarningStatus.MISSING, None, score)
 
     prefix_found = m.group(0)
-    # Window the candidate body: statutory length plus slack for OCR noise.
-    body = norm[m.end() :].strip()[: len(STATUTORY_BODY) + 60]
+    # Window the candidate body: statutory length plus slack for OCR noise
+    # and stray tokens between the prefix and the body.
+    body = norm[m.end() :].strip()[: len(STATUTORY_BODY) + 120]
 
-    body_exact = body.casefold().startswith(STATUTORY_BODY.casefold())
+    body_exact = STATUTORY_BODY.casefold() in body.casefold()
     prefix_caps = prefix_found == STATUTORY_PREFIX
     found = f"{prefix_found} {body}".strip()
 

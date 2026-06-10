@@ -28,4 +28,6 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PORT=8000
 VOLUME /data
 EXPOSE 8000
-CMD ["sh", "-c", "uvicorn server.app:app --host 0.0.0.0 --port ${PORT}"]
+# Bind :: (dual-stack): Railway's private mesh and edge reach the
+# container over IPv6; plain 0.0.0.0 is unreachable there.
+CMD ["sh", "-c", "uvicorn server.app:app --host :: --port ${PORT}"]

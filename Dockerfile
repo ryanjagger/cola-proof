@@ -23,10 +23,11 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY server/ server/
 COPY --from=web /build/dist/ web/dist/
 
+# /data is provided by a platform volume (Railway) or compose volume; a
+# Dockerfile VOLUME directive is rejected by Railway's builder.
 ENV PATH="/app/.venv/bin:$PATH" \
     DATA_DIR=/data \
     PORT=8000
-VOLUME /data
 EXPOSE 8000
 # Bind :: (dual-stack): Railway's private mesh and edge reach the
 # container over IPv6; plain 0.0.0.0 is unreachable there.

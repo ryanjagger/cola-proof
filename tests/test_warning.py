@@ -1,0 +1,103 @@
+"""Table-driven tests for the deterministic GOVERNMENT WARNING validator."""
+
+import pytest
+
+from server.pipeline.warning import (
+    STATUTORY_BODY,
+    STATUTORY_PREFIX,
+    WarningStatus,
+    validate_warning,
+    validate_warning_across,
+)
+
+CANONICAL = f"{STATUTORY_PREFIX} {STATUTORY_BODY}"
+
+
+def test_exact():
+    r = validate_warning(CANONICAL)
+    assert r.status == WarningStatus.EXACT
+    assert r.score == 100.0
+
+
+def test_exact_with_line_breaks_and_hyphenation():
+    wrapped = CANONICAL.replace("machinery", "machin-\nery").replace(
+        "beverages during", "beverages\nduring"
+    )
+    assert validate_warning(wrapped).status == WarningStatus.EXACT
+
+
+def test_exact_embedded_in_other_label_text():
+    text = f"750 ML  PRODUCT OF PERU\n{CANONICAL}\nBOTTLED BY ..."
+    assert validate_warning(text).status == WarningStatus.EXACT
+
+
+def test_exact_when_body_is_all_caps():
+    # Regulation fixes the wording; body case isn't part of the check.
+    assert validate_warning(
+        f"{STATUTORY_PREFIX} {STATUTORY_BODY.upper()}"
+    ).status == WarningStatus.EXACT
+
+
+def test_prefix_not_all_caps_fails_format():
+    r = validate_warning(f"Government Warning: {STATUTORY_BODY}")
+    assert r.status == WarningStatus.PREFIX_NOT_CAPS
+
+
+def test_prefix_missing_colon_is_not_exact():
+    r = validate_warning(f"GOVERNMENT WARNING {STATUTORY_BODY}")
+    assert r.status != WarningStatus.EXACT
+
+
+def test_near_single_word_wrong():
+    # "should not" dropped -> almost matches -> escalate, never auto-fail
+    body = STATUTORY_BODY.replace("women should not drink", "women should drink")
+    r = validate_warning(f"{STATUTORY_PREFIX} {body}")
+    assert r.status == WarningStatus.NEAR
+    assert r.score >= 90
+
+
+def test_near_ocr_noise():
+    noisy = CANONICAL.replace("Surgeon General", "Surge0n Generai").replace(
+        "machinery", "rnachinery"
+    )
+    assert validate_warning(noisy).status == WarningStatus.NEAR
+
+
+def test_mismatch_truncated_body():
+    r = validate_warning(f"{STATUTORY_PREFIX} (1) According to the Surgeon General.")
+    assert r.status in (WarningStatus.MISMATCH, WarningStatus.NEAR)
+    assert r.status != WarningStatus.EXACT
+
+
+def test_missing():
+    assert validate_warning("ESTATE BOTTLED 750ML").status == WarningStatus.MISSING
+    assert validate_warning("").status == WarningStatus.MISSING
+    assert validate_warning(None).status == WarningStatus.MISSING
+
+
+def test_across_crops_most_favorable_wins():
+    r = validate_warning_across(["front label text only", CANONICAL])
+    assert r.status == WarningStatus.EXACT
+
+
+def test_across_crops_all_missing():
+    r = validate_warning_across(["front", None, ""])
+    assert r.status == WarningStatus.MISSING
+
+
+def test_across_no_crops():
+    assert validate_warning_across([]).status == WarningStatus.MISSING
+
+
+@pytest.mark.parametrize(
+    "mutation,max_status",
+    [
+        # statutory wording deviations the validator must never call EXACT
+        (lambda s: s.replace("birth defects", "health defects"), WarningStatus.NEAR),
+        (lambda s: s.replace("(2)", ""), WarningStatus.NEAR),
+        (lambda s: s.replace("impairs", "impair"), WarningStatus.NEAR),
+    ],
+)
+def test_wording_deviations_never_exact(mutation, max_status):
+    r = validate_warning(f"{STATUTORY_PREFIX} {mutation(STATUTORY_BODY)}")
+    assert r.status != WarningStatus.EXACT

@@ -1,0 +1,325 @@
+"""Field-aware normalization and three-valued matching.
+
+Each form field is compared against label-extracted text with a
+field-specific normalizer (unit canonicalization for net contents,
+numeric-% extraction for ABV, case/punct/accent folding for brand,
+description-term mapping for class/type). Outcomes are three-valued:
+
+    EXACT      — matches after normalization
+    NEAR_MISS  — almost matches -> human review
+    MISMATCH   — substantially different -> recommended fail
+    MISSING    — expected on the label but not found -> review
+
+Differences that normalization removes (casing, punctuation, accents,
+unit spelling) count as EXACT with normalized=True so the UI can tag
+"(normalized)". Fuzzy thresholds: token ratio >= 97 is exact, 85-97 is a
+near-miss, below is a mismatch.
+
+On 06-2016 forms net contents and ABV have no typed field; for those the
+format_check_* functions verify the value is present and plausible on
+the label instead of comparing form vs label.
+"""
+
+from __future__ import annotations
+
+import re
+import unicodedata
+from dataclasses import dataclass
+from enum import Enum
+
+from rapidfuzz import fuzz
+
+EXACT_THRESHOLD = 97.0
+NEAR_THRESHOLD = 85.0
+
+
+class Outcome(str, Enum):
+    EXACT = "exact"
+    NEAR_MISS = "near_miss"
+    MISMATCH = "mismatch"
+    MISSING = "missing"
+
+
+@dataclass
+class Verdict:
+    field: str
+    form_value: str | None
+    label_value: str | None  # what was found on the label
+    outcome: Outcome
+    score: float | None = None
+    normalized: bool = False  # comparison used normalized forms
+    note: str | None = None
+
+
+def normalize_text(s: str) -> str:
+    """Case/punctuation/accent-insensitive canonical form."""
+    s = unicodedata.normalize("NFKD", s)
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.casefold()
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return s.strip()
+
+
+# --- brand / fanciful name ------------------------------------------------
+
+
+def match_name(field: str, form_value: str, label_texts: list[str]) -> Verdict:
+    """Match a name (brand or fanciful) against crop texts.
+
+    The label side is free text, so the comparison looks for the best
+    window of the crop text rather than whole-string equality.
+    """
+    needle = normalize_text(form_value)
+    if not needle:
+        return Verdict(field, form_value, None, Outcome.MISSING, note="empty form value")
+    best_score, best_text = 0.0, None
+    for text in label_texts:
+        hay = normalize_text(text or "")
+        if not hay:
+            continue
+        a = fuzz.partial_ratio_alignment(needle, hay)
+        if a is not None and a.score > best_score:
+            best_score = a.score
+            best_text = hay[a.dest_start : a.dest_end].strip()
+    # "(normalized)" is shown only when normalization did real work: the
+    # form string never appears verbatim on the label.
+    normalized = not any(form_value in (t or "") for t in label_texts)
+    if best_score >= EXACT_THRESHOLD:
+        return Verdict(field, form_value, best_text, Outcome.EXACT, best_score, normalized)
+    if best_score >= NEAR_THRESHOLD:
+        return Verdict(field, form_value, best_text, Outcome.NEAR_MISS, best_score, normalized)
+    if best_score > 50:
+        return Verdict(field, form_value, best_text, Outcome.MISMATCH, best_score, normalized)
+    return Verdict(field, form_value, None, Outcome.MISSING, best_score)
+
+
+# --- net contents ---------------------------------------------------------
+
+_UNIT_ML = {
+    "ml": 1.0,
+    "milliliter": 1.0,
+    "milliliters": 1.0,
+    "millilitre": 1.0,
+    "millilitres": 1.0,
+    "cl": 10.0,
+    "centiliter": 10.0,
+    "centiliters": 10.0,
+    "l": 1000.0,
+    "liter": 1000.0,
+    "liters": 1000.0,
+    "litre": 1000.0,
+    "litres": 1000.0,
+    "fl oz": 29.5735,
+    "fluid ounce": 29.5735,
+    "fluid ounces": 29.5735,
+    "gallon": 3785.41,
+    "gallons": 3785.41,
+    "barrel": 117348.0,
+    "barrels": 117348.0,
+}
+
+_NET_RE = re.compile(
+    r"(\d+(?:[.,]\d+)?)\s*"
+    r"(milliliters?|millilitres?|centiliters?|liters?|litres?|"
+    r"fl\.?\s*oz|fluid\s+ounces?|gallons?|barrels?|ml|cl|l)\b",
+    re.IGNORECASE,
+)
+
+
+def parse_net_contents_all(text: str) -> list[tuple[float, str]]:
+    """All volume statements in the text -> [(milliliters, matched text)]."""
+    out = []
+    for m in _NET_RE.finditer(text):
+        qty = float(m.group(1).replace(",", "."))
+        unit = re.sub(r"\s+", " ", m.group(2).lower().replace(".", "").strip())
+        factor = _UNIT_ML.get(unit) or _UNIT_ML.get(unit.rstrip("s"))
+        if factor is not None:
+            out.append((qty * factor, m.group(0)))
+    return out
+
+
+def parse_net_contents(text: str) -> tuple[float, str] | None:
+    found = parse_net_contents_all(text)
+    return found[0] if found else None
+
+
+def match_net_contents(form_value: str, label_texts: list[str]) -> Verdict:
+    form_parsed = parse_net_contents(form_value)
+    if form_parsed is None:
+        return Verdict(
+            "net_contents", form_value, None, Outcome.MISSING,
+            note="form value not parseable as a volume",
+        )
+    form_ml, _ = form_parsed
+    found = [p for t in label_texts if t for p in parse_net_contents_all(t)]
+    if not found:
+        return Verdict("net_contents", form_value, None, Outcome.MISSING)
+    # Any volume statement on any crop stating the right volume satisfies
+    # the check; pick the closest candidate.
+    label_ml, label_str = min(found, key=lambda x: abs(x[0] - form_ml))
+    if abs(label_ml - form_ml) < 0.5:
+        return Verdict(
+            "net_contents", form_value, label_str, Outcome.EXACT, 100.0,
+            normalized=label_str.strip().lower() != form_value.strip().lower(),
+        )
+    return Verdict("net_contents", form_value, label_str, Outcome.MISMATCH, 0.0)
+
+
+# --- alcohol content ------------------------------------------------------
+
+_ABV_RE = re.compile(
+    r"(?:alc(?:ohol)?\.?\s*)?(\d{1,2}(?:[.,]\d+)?)\s*%"
+    r"|(\d{1,3}(?:\.\d+)?)\s*proof\b",
+    re.IGNORECASE,
+)
+
+
+def parse_abv_all(text: str) -> list[tuple[float, str]]:
+    """All ABV statements in the text. Proof converts to ABV."""
+    out = []
+    for m in _ABV_RE.finditer(text):
+        if m.group(1) is not None:
+            out.append((float(m.group(1).replace(",", ".")), m.group(0)))
+        else:
+            out.append((float(m.group(2)) / 2.0, m.group(0)))
+    if not out:
+        # Form side may be a bare number ("42", "11.5").
+        m = re.fullmatch(r"\s*(\d{1,2}(?:\.\d+)?)\s*", text)
+        if m:
+            out.append((float(m.group(1)), m.group(1)))
+    return out
+
+
+def parse_abv(text: str) -> tuple[float, str] | None:
+    found = parse_abv_all(text)
+    return found[0] if found else None
+
+
+def match_abv(form_value: str, label_texts: list[str]) -> Verdict:
+    form_parsed = parse_abv(form_value)
+    if form_parsed is None:
+        return Verdict(
+            "alcohol_content", form_value, None, Outcome.MISSING,
+            note="form value not parseable as ABV",
+        )
+    form_pct, _ = form_parsed
+    found = [p for t in label_texts if t for p in parse_abv_all(t)]
+    if not found:
+        return Verdict("alcohol_content", form_value, None, Outcome.MISSING)
+    label_pct, label_str = min(found, key=lambda x: abs(x[0] - form_pct))
+    if abs(label_pct - form_pct) < 0.05:
+        return Verdict(
+            "alcohol_content", form_value, label_str, Outcome.EXACT, 100.0,
+            normalized=label_str.strip() != form_value.strip(),
+        )
+    return Verdict("alcohol_content", form_value, label_str, Outcome.MISMATCH, 0.0)
+
+
+# --- class / type ---------------------------------------------------------
+
+# Generic catalogue words that don't identify the product on a label.
+_CLASS_STOPWORDS = {
+    "other", "than", "with", "and", "the", "usb", "fb", "specialties",
+    "proprietaries", "flavored", "natural", "artificial",
+}
+
+
+def _class_terms(description: str) -> list[str]:
+    """Candidate label terms from a class/type description.
+
+    Descriptions carry parenthesized aliases — e.g. "OTHER GRAPE BRANDY
+    (PISCO, GRAPPA) FB" — and the alias is usually what the label says,
+    especially on non-English imports.
+    """
+    terms = []
+    for alias_group in re.findall(r"\(([^)]+)\)", description):
+        for alias in re.split(r"[,/]", alias_group):
+            if alias.strip():
+                terms.append(alias.strip())
+    bare = re.sub(r"\([^)]*\)", " ", description)
+    words = [w for w in re.split(r"[^A-Za-z]+", bare) if len(w) >= 3]
+    content = [w for w in words if w.lower() not in _CLASS_STOPWORDS]
+    if content:
+        terms.append(" ".join(content))  # full phrase, e.g. "GRAPE BRANDY"
+        terms.extend(w for w in content if len(w) >= 4)
+    return terms
+
+
+def match_class_type(description: str, label_texts: list[str]) -> Verdict:
+    """Does any term of the class/type description appear on the label?
+
+    Whisky/whiskey-style spelling variants land in the near-miss band by
+    construction and are upgraded to exact: the description maps, it
+    doesn't transcribe.
+    """
+    terms = _class_terms(description)
+    if not terms:
+        return Verdict(
+            "class_type", description, None, Outcome.MISSING,
+            note="no usable terms in description",
+        )
+    best_score, best_text = 0.0, None
+    for text in label_texts:
+        hay = normalize_text(text or "")
+        if not hay:
+            continue
+        for term in terms:
+            a = fuzz.partial_ratio_alignment(normalize_text(term), hay)
+            if a is not None and a.score > best_score:
+                best_score = a.score
+                best_text = hay[a.dest_start : a.dest_end].strip()
+    if best_score >= NEAR_THRESHOLD:
+        return Verdict(
+            "class_type", description, best_text, Outcome.EXACT, best_score,
+            normalized=True,
+        )
+    if best_score > 60:
+        return Verdict(
+            "class_type", description, best_text, Outcome.NEAR_MISS, best_score,
+            normalized=True,
+        )
+    return Verdict("class_type", description, None, Outcome.MISSING, best_score)
+
+
+# --- label-format checks (06-2016: no typed form field) --------------------
+
+
+def format_check_abv(label_texts: list[str]) -> Verdict:
+    """ABV present and plausible on the label (06-2016 forms)."""
+    found = [p for t in label_texts if t for p in [parse_abv(t)] if p]
+    if not found:
+        return Verdict("alcohol_content", None, None, Outcome.MISSING,
+                       note="not on form — format check only")
+    pct, label_str = found[0]
+    if 0.0 < pct <= 80.0:
+        return Verdict("alcohol_content", None, label_str, Outcome.EXACT, 100.0,
+                       note="not on form — format check only")
+    return Verdict("alcohol_content", None, label_str, Outcome.MISMATCH, 0.0,
+                   note=f"implausible ABV {pct}%")
+
+
+def format_check_net_contents(label_texts: list[str]) -> Verdict:
+    """Net contents present and plausible on the label (06-2016 forms)."""
+    found = [p for t in label_texts if t for p in [parse_net_contents(t)] if p]
+    if not found:
+        return Verdict("net_contents", None, None, Outcome.MISSING,
+                       note="not on form — format check only")
+    ml, label_str = found[0]
+    if 20.0 <= ml <= 200000.0:
+        return Verdict("net_contents", None, label_str, Outcome.EXACT, 100.0,
+                       note="not on form — format check only")
+    return Verdict("net_contents", None, label_str, Outcome.MISMATCH, 0.0,
+                   note=f"implausible volume {ml:.0f} ml")
+
+
+# --- aggregation ----------------------------------------------------------
+
+
+def aggregate_outcomes(outcomes: list[Outcome]) -> str:
+    """Field outcomes -> auto-status. Never encodes a rejection: a Fail
+    is a recommendation the agent confirms."""
+    if any(o == Outcome.MISMATCH for o in outcomes):
+        return "Fail"
+    if any(o in (Outcome.NEAR_MISS, Outcome.MISSING) for o in outcomes):
+        return "Needs Review"
+    return "Pass"

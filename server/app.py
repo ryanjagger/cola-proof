@@ -16,12 +16,13 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import settings
+from .export import SCOPES, batch_csv, batch_pdf, filter_scope, record_pdf
 from .pipeline.runner import RecordResult, escalate, process_pdf
 from .pipeline.vision import VisionClient
 from .store import Store
@@ -181,6 +182,57 @@ async def batch_events(batch_id: str) -> StreamingResponse:
         stream(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# --- export -----------------------------------------------------------------
+
+
+def _scoped_records(batch_id: str, scope: str) -> list[dict]:
+    if not store.get_batch(batch_id):
+        raise HTTPException(404, "batch not found")
+    if scope not in SCOPES:
+        raise HTTPException(422, f"scope must be one of {', '.join(SCOPES)}")
+    return filter_scope(store.list_records(batch_id), scope)
+
+
+@app.get("/api/batches/{batch_id}/export.csv")
+def export_csv(batch_id: str, scope: str = "all") -> Response:
+    records = _scoped_records(batch_id, scope)
+    return Response(
+        batch_csv(records),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="cola-proof-{batch_id}-{scope}.csv"'
+        },
+    )
+
+
+@app.get("/api/batches/{batch_id}/export.pdf")
+def export_pdf(batch_id: str, scope: str = "all") -> Response:
+    records = _scoped_records(batch_id, scope)
+    pdf = batch_pdf(records, store.batch_summary(batch_id), store.media_root, scope)
+    return Response(
+        pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="cola-proof-{batch_id}-{scope}.pdf"'
+        },
+    )
+
+
+@app.get("/api/records/{record_id}/export.pdf")
+def export_record_pdf(record_id: str) -> Response:
+    record = store.get_record(record_id)
+    if not record:
+        raise HTTPException(404, "record not found")
+    pdf = record_pdf(record, store.media_root)
+    return Response(
+        pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="cola-proof-{record.get("ttb_id") or record_id}.pdf"'
+        },
     )
 
 

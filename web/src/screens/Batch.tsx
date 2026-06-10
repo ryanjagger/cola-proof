@@ -106,7 +106,7 @@ export default function Batch() {
         </div>
       )}
 
-      <div className="mb-4 flex gap-2">
+      <div className="mb-4 flex items-center gap-2">
         {FILTERS.map((f) => (
           <button
             key={f.key}
@@ -120,6 +120,34 @@ export default function Batch() {
             {f.label}
           </button>
         ))}
+        <span className="flex-1" />
+        <a
+          href={`/api/batches/${batchId}/export.csv?scope=${filter}`}
+          className="rounded-lg bg-white px-3 py-1 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
+        >
+          Export CSV
+        </a>
+        <a
+          href={`/api/batches/${batchId}/export.pdf?scope=${filter}`}
+          className="rounded-lg bg-white px-3 py-1 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
+        >
+          Export PDF
+        </a>
+        <button
+          onClick={async () => {
+            if (
+              window.confirm(
+                'Delete this batch and purge the uploaded PDFs and label images? Export first — the export is what you keep.',
+              )
+            ) {
+              await fetch(`/api/batches/${batchId}`, { method: 'DELETE' })
+              window.location.href = '/'
+            }
+          }}
+          className="rounded-lg bg-white px-3 py-1 text-sm text-red-700 ring-1 ring-red-200 hover:bg-red-50"
+        >
+          Delete & purge
+        </button>
       </div>
 
       <ul className="space-y-2">

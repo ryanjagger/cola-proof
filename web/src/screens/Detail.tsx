@@ -80,7 +80,15 @@ export default function Detail() {
               .join(' · ')}
           </p>
         </div>
-        <AutoStatusBadge record={record} />
+        <div className="flex items-start gap-4">
+          <a
+            href={`/api/records/${record.id}/export.pdf`}
+            className="rounded-lg bg-white px-3 py-1.5 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
+          >
+            Record PDF
+          </a>
+          <AutoStatusBadge record={record} />
+        </div>
       </header>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">

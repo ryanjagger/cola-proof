@@ -100,6 +100,11 @@ def evaluate(result: RecordResult) -> None:
         for c, o in zip(result.crops, result.ocr)
         if c.matchable and o.readable
     ]
+    other_texts = [
+        o.text
+        for c, o in zip(result.crops, result.ocr)
+        if not c.matchable and o.readable
+    ]
     all_texts = [o.text for o in result.ocr if o.readable]
     for c in result.crops:
         v = result.vision.get(c.index)
@@ -107,25 +112,32 @@ def evaluate(result: RecordResult) -> None:
             all_texts.append(v.combined_text)
             if c.matchable:
                 matchable_texts.append(v.combined_text)
+            else:
+                other_texts.append(v.combined_text)
+    # Net contents and ABV routinely live on neck/strip labels, so the
+    # numeric matchers may use 'other' crops too: they only accept
+    # unit/%/proof patterns, so stray text can't false-match the way a
+    # name could. Brand and class/type stay front/back-only.
+    numeric_texts = matchable_texts + other_texts
 
     verdicts = []
     verdicts.append(match_name("brand_name", form.brand_name or "", matchable_texts))
     if form.has_net_contents_field and form.net_contents:
-        v = match_net_contents(form.net_contents, matchable_texts)
+        v = match_net_contents(form.net_contents, numeric_texts)
         v = _container_wording_fallback(
             v, lambda texts: match_net_contents(form.net_contents, texts), form
         )
         verdicts.append(v)
     else:
-        verdicts.append(format_check_net_contents(matchable_texts))
+        verdicts.append(format_check_net_contents(numeric_texts))
     if form.has_alcohol_content_field and form.alcohol_content:
-        v = match_abv(form.alcohol_content, matchable_texts)
+        v = match_abv(form.alcohol_content, numeric_texts)
         v = _container_wording_fallback(
             v, lambda texts: match_abv(form.alcohol_content, texts), form
         )
         verdicts.append(v)
     else:
-        verdicts.append(format_check_abv(matchable_texts))
+        verdicts.append(format_check_abv(numeric_texts))
     if form.class_type_description:
         verdicts.append(
             match_class_type(form.class_type_description, matchable_texts)
@@ -157,14 +169,20 @@ def escalate(result: RecordResult, client: VisionClient, max_crops: int = 3) -> 
     re-evaluate the record on the richer text pool.
 
     Crop choice: matchable crops first (front/back carry the fields);
-    'other' crops (strips, necks) only when the warning still isn't exact,
-    since the warning is often printed there. Per-crop failures and
-    timeouts are swallowed — the record just keeps its Tier A verdicts and
-    stays in review: couldn't-read-clearly is never a rejection.
+    'other' crops (strips, necks) when the warning still isn't exact or a
+    numeric field is unresolved — warnings and volume/ABV statements are
+    often printed there. Per-crop failures and timeouts are swallowed —
+    the record just keeps its Tier A verdicts and stays in review:
+    couldn't-read-clearly is never a rejection.
     """
     warning_open = result.warning and result.warning.status != WarningStatus.EXACT
+    numeric_missing = any(
+        v.field in ("net_contents", "alcohol_content")
+        and v.outcome == Outcome.MISSING
+        for v in result.verdicts
+    )
     candidates = [c for c in result.crops if c.matchable]
-    if warning_open:
+    if warning_open or numeric_missing:
         others = [c for c in result.crops if not c.matchable]
         others.sort(key=lambda c: c.px_width * c.px_height, reverse=True)
         candidates.extend(others)
@@ -255,10 +273,14 @@ def _print_record(result: RecordResult) -> None:
             o = result.ocr[i]
             inv = " inv" if o.inverted else ""
             ocr_note = f"  ocr: conf={o.mean_conf} weak={o.low_conf_fraction:.0%}{inv} {o.elapsed_ms}ms"
+        tier_b = ""
+        if (v := result.vision.get(c.index)) is not None:
+            err = f" ({v.error})" if v.error else ""
+            tier_b = f"  tierB: ok={v.ok} {v.elapsed_ms}ms{err}"
         print(
             f"  crop[{c.index}] {c.kind:6s} {c.caption_type:28s} "
             f'{c.width_in}"x{c.height_in}" {c.px_width}x{c.px_height}px '
-            f"{c.dpi}dpi p{c.page} {c.ext}{aspect}{ocr_note}"
+            f"{c.dpi}dpi p{c.page} {c.ext}{aspect}{ocr_note}{tier_b}"
         )
     for v in result.verdicts:
         score = f" {v.score:.0f}" if v.score is not None else ""

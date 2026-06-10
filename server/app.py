@@ -49,6 +49,7 @@ def _crop_meta(result: RecordResult, crop_dir: Path) -> list[dict]:
     for crop, ocr in zip(result.crops, result.ocr or [None] * len(result.crops)):
         filename = f"{crop.index}_{crop.kind}.{crop.ext}"
         (crop_dir / filename).write_bytes(crop.data)
+        vision = result.vision.get(crop.index)
         out.append(
             {
                 "index": crop.index,
@@ -62,6 +63,10 @@ def _crop_meta(result: RecordResult, crop_dir: Path) -> list[dict]:
                 "ext": crop.ext,
                 "filename": filename,
                 "ocr_conf": ocr.mean_conf if ocr else None,
+                # Tier B audit trail; None when the crop wasn't re-read.
+                "vision_ok": vision.ok if vision else None,
+                "vision_ms": vision.elapsed_ms if vision else None,
+                "vision_error": vision.error if vision else None,
             }
         )
     return out

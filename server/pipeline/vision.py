@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from dataclasses import dataclass
 
 import httpx
@@ -31,9 +32,11 @@ PROMPT = (
     "- net_contents_text: the net contents / volume statement as printed\n"
     "- warning_text: the complete government warning paragraph verbatim, "
     "every word exactly as printed on THIS label\n"
-    "- full_text: all other readable text on the label\n"
-    "Rules: copy only what is visible in the image. If something is not "
-    "printed on the label or you cannot read it, return null for that "
+    "- full_text: all other readable text on the label, briefly — skip "
+    "decorative flourishes and repeated text\n"
+    "Rules: copy only what is visible in the image. Write words normally — "
+    "never insert spaces between the letters of a word. If something is "
+    "not printed on the label or you cannot read it, return null for that "
     "field. NEVER guess, complete from memory, or correct spelling."
 )
 
@@ -50,6 +53,30 @@ SCHEMA = {
         "brand_text", "abv_text", "net_contents_text", "warning_text", "full_text",
     ],
 }
+
+
+_FIELD_KEYS = (
+    "brand_text", "abv_text", "net_contents_text", "warning_text", "full_text",
+)
+
+
+def _parse_lenient(content: str) -> dict | None:
+    """Salvage complete string fields from truncated/malformed JSON.
+
+    Constrained decoding can hit the token cap mid-string, leaving an
+    unterminated JSON document. Any field whose string literal completed
+    is still good evidence — losing the whole read over the last field is
+    what stranded records in review.
+    """
+    out = {}
+    for key in _FIELD_KEYS:
+        m = re.search(rf'"{key}"\s*:\s*("(?:[^"\\]|\\.)*")', content)
+        if m:
+            try:
+                out[key] = json.loads(m.group(1))
+            except json.JSONDecodeError:
+                continue
+    return out or None
 
 
 @dataclass
@@ -108,7 +135,7 @@ class VisionClient:
         payload = {
             "model": self.model,
             "temperature": 0,
-            "max_tokens": 1500,
+            "max_tokens": 3000,
             "messages": [
                 {
                     "role": "user",
@@ -127,14 +154,28 @@ class VisionClient:
             },
         }
         start = time.monotonic()
+        error = None
         try:
             resp = self._http.post(
                 f"{self.base_url}/chat/completions",
                 json=payload,
             )
             resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
-            data = json.loads(content)
+            choice = resp.json()["choices"][0]
+            content = choice["message"]["content"]
+            truncated = choice.get("finish_reason") == "length"
+            try:
+                data = json.loads(content)
+                if truncated:
+                    error = "output hit token cap (parsed cleanly)"
+            except json.JSONDecodeError as e:
+                data = _parse_lenient(content)
+                if data is None:
+                    raise e
+                error = (
+                    f"{'truncated' if truncated else 'malformed'} output; "
+                    f"salvaged {len(data)} field(s)"
+                )
         except (httpx.HTTPError, KeyError, json.JSONDecodeError) as e:
             return VisionResult(
                 ok=False,
@@ -148,5 +189,6 @@ class VisionClient:
             net_contents_text=data.get("net_contents_text"),
             warning_text=data.get("warning_text"),
             full_text=data.get("full_text"),
+            error=error,
             elapsed_ms=int((time.monotonic() - start) * 1000),
         )

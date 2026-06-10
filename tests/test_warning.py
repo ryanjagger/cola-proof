@@ -19,6 +19,25 @@ def test_exact():
     assert r.score == 100.0
 
 
+def test_exact_when_letter_spaced():
+    """Schema-constrained VLM output letter-spaces transcriptions
+    ("G O V E R N M E N T ..."); whitespace normalization must make a
+    letter-perfect transcription EXACT."""
+    spaced = " ".join(CANONICAL)
+    assert validate_warning(spaced).status == WarningStatus.EXACT
+
+
+def test_letter_spaced_with_wrong_word_is_not_exact():
+    body = STATUTORY_BODY.replace("SHOULD", "SHOULO").replace("should", "shoulo")
+    spaced = " ".join(f"{STATUTORY_PREFIX} {body}")
+    assert validate_warning(spaced).status != WarningStatus.EXACT
+
+
+def test_letter_spaced_lowercase_prefix_fails_format():
+    spaced = " ".join(f"Government Warning: {STATUTORY_BODY}")
+    assert validate_warning(spaced).status == WarningStatus.PREFIX_NOT_CAPS
+
+
 def test_exact_with_line_breaks_and_hyphenation():
     wrapped = CANONICAL.replace("machinery", "machin-\nery").replace(
         "beverages during", "beverages\nduring"

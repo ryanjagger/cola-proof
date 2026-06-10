@@ -58,7 +58,18 @@ _PRECEDENCE = [
     WarningStatus.MISSING,
 ]
 
-_PREFIX_RE = re.compile(r"GOVERNMENT\s+WARNING\s*:?", re.IGNORECASE)
+
+def _spaced(word: str) -> str:
+    return r"\s*".join(word)
+
+
+# Tolerates whitespace inside the words: OCR drops spaces and
+# schema-constrained VLM output letter-spaces ("G O V E R N M E N T ...").
+# The caps requirement is enforced separately on the matched text.
+_PREFIX_RE = re.compile(
+    _spaced("GOVERNMENT") + r"\s*" + _spaced("WARNING") + r"\s*:?",
+    re.IGNORECASE,
+)
 
 
 def _normalize(text: str) -> str:
@@ -67,6 +78,17 @@ def _normalize(text: str) -> str:
     # collapse all whitespace.
     text = re.sub(r"-\s*\n\s*", "", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _squash(text: str) -> str:
+    """Remove all whitespace — the spec allows whitespace/line-break
+    normalization only, and this is its strongest form. Makes the exact
+    check immune to line wrapping and letter-spaced transcriptions."""
+    return re.sub(r"\s+", "", text)
+
+
+_SQ_BODY = _squash(STATUTORY_BODY)
+_SQ_PREFIX = _squash(STATUTORY_PREFIX)  # "GOVERNMENTWARNING:"
 
 
 def validate_warning(text: str | None) -> WarningResult:
@@ -79,18 +101,20 @@ def validate_warning(text: str | None) -> WarningResult:
     if not m:
         # No recognizable prefix; the body might still be present
         # (e.g. OCR mangled "GOVERNMENT").
-        score = fuzz.partial_ratio(STATUTORY_BODY.casefold(), norm.casefold())
+        score = fuzz.partial_ratio(_SQ_BODY.casefold(), _squash(norm).casefold())
         if score >= NEAR_THRESHOLD:
             return WarningResult(WarningStatus.NEAR, norm, score)
         return WarningResult(WarningStatus.MISSING, None, score)
 
     prefix_found = m.group(0)
     # Window the candidate body: statutory length plus slack for OCR noise
-    # and stray tokens between the prefix and the body.
+    # and stray tokens between the prefix and the body. Comparison runs
+    # whitespace-free; the displayed text stays human-readable.
     body = norm[m.end() :].strip()[: len(STATUTORY_BODY) + 120]
+    body_sq = _squash(norm[m.end() :])[: len(_SQ_BODY) + 120]
 
-    body_exact = STATUTORY_BODY.casefold() in body.casefold()
-    prefix_caps = prefix_found == STATUTORY_PREFIX
+    body_exact = _SQ_BODY.casefold() in body_sq.casefold()
+    prefix_caps = _squash(prefix_found) == _SQ_PREFIX
     found = f"{prefix_found} {body}".strip()
 
     if body_exact and prefix_caps:
@@ -98,7 +122,7 @@ def validate_warning(text: str | None) -> WarningResult:
     if body_exact:
         return WarningResult(WarningStatus.PREFIX_NOT_CAPS, found, 100.0)
 
-    score = fuzz.partial_ratio(STATUTORY_BODY.casefold(), body.casefold())
+    score = fuzz.partial_ratio(_SQ_BODY.casefold(), body_sq.casefold())
     if score >= NEAR_THRESHOLD:
         return WarningResult(WarningStatus.NEAR, found, score)
     if score >= MISMATCH_THRESHOLD:

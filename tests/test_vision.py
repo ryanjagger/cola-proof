@@ -73,6 +73,50 @@ def test_read_crop_degrades_on_garbage_payload():
     assert not r.ok
 
 
+def test_truncated_json_salvages_complete_fields():
+    """Token-cap truncation mid-string must not discard the whole read —
+    that's exactly how the Black Maple Hill front-label evidence was lost."""
+    cut_off = (
+        '{"brand_text": "Black Maple Hill", '
+        '"abv_text": null, '
+        '"net_contents_text": "750ml", '
+        '"warning_text": "GOVERNMENT WARNING: (1) Accord'  # unterminated
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": cut_off}, "finish_reason": "length"}
+                ]
+            },
+        )
+
+    r = _client(handler).read_crop(b"fakejpeg", "jpeg")
+    assert r.ok
+    assert r.brand_text == "Black Maple Hill"
+    assert r.net_contents_text == "750ml"
+    assert r.warning_text is None  # the incomplete field is dropped
+    assert "truncated" in r.error
+    assert "750ml" in r.combined_text
+
+
+def test_truncated_json_with_nothing_salvageable_fails():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": '{"brand_te'}, "finish_reason": "length"}
+                ]
+            },
+        )
+
+    r = _client(handler).read_crop(b"fakejpeg", "jpeg")
+    assert not r.ok
+
+
 def test_unconfigured_client_reports_not_configured():
     r = VisionClient("", "m").read_crop(b"x", "jpeg")
     assert not r.ok
@@ -173,23 +217,46 @@ def test_escalation_failure_keeps_tier_a_verdicts():
     assert [v.outcome for v in record.verdicts] == before
 
 
-def test_escalation_reads_other_crops_only_when_warning_open():
+def test_escalation_reads_other_crops_when_warning_or_numeric_open():
     record = _record()
     record.crops.append(_crop(2, "other"))
     record.ocr.append(OcrResult(text="", words=[]))
 
     fake = FakeVision(VisionResult(ok=True, full_text="nothing useful"))
     escalate(record, fake, max_crops=5)
-    # warning unresolved -> matchable crops AND the 'other' strip read
+    # warning + numerics unresolved -> matchable crops AND the 'other' strip
     assert set(record.vision.keys()) == {0, 1, 2}
 
+    # Warning exact and numerics satisfied -> only matchable crops re-read.
     record2 = _record()
     record2.crops.append(_crop(2, "other"))
-    record2.ocr.append(OcrResult(text=CANONICAL_WARNING, words=[("x", 95.0)],
-                                 mean_conf=95.0, low_conf_fraction=0.0))
+    record2.ocr.append(
+        OcrResult(
+            text=f"{CANONICAL_WARNING}\n750 ml\nAlc. 42% by Vol",
+            words=[("x", 95.0)], mean_conf=95.0, low_conf_fraction=0.0,
+        )
+    )
     evaluate(record2)
     assert record2.warning.status == WarningStatus.EXACT
     fake2 = FakeVision(VisionResult(ok=True, full_text="nothing useful"))
     escalate(record2, fake2, max_crops=5)
-    # warning already exact -> only matchable crops are re-read
     assert set(record2.vision.keys()) == {0, 1}
+
+
+def test_numeric_fields_match_from_other_crops():
+    """ABV/net contents printed on a neck or strip label count as evidence:
+    the 47.5% on Black Maple Hill's neck was read at conf 83 and discarded."""
+    record = _record()
+    record.crops.append(_crop(2, "other"))
+    record.ocr.append(
+        OcrResult(
+            text="Aged in Select White Oak Casks\nAlc 42 % by Vol. 750 ml",
+            words=[("x", 83.0)], mean_conf=83.0, low_conf_fraction=0.1,
+        )
+    )
+    evaluate(record)
+    by_field = {v.field: v for v in record.verdicts}
+    assert by_field["alcohol_content"].outcome == Outcome.EXACT
+    assert by_field["net_contents"].outcome == Outcome.EXACT
+    # brand still has no front/back evidence: 'other' text never feeds names
+    assert by_field["brand_name"].outcome == Outcome.MISSING

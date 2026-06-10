@@ -22,12 +22,21 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import settings
-from .pipeline.runner import RecordResult, process_pdf
+from .pipeline.runner import RecordResult, escalate, process_pdf
+from .pipeline.vision import VisionClient
 from .store import Store
 
 app = FastAPI(title="COLA Proof")
 store = Store(settings.db_path, settings.media_dir)
 _executor = ThreadPoolExecutor(max_workers=settings.ocr_workers)
+# Tier B is a separate, smaller pool: the CPU vision model is slow, so
+# escalations queue here while Tier A keeps streaming results.
+_vision_executor = ThreadPoolExecutor(max_workers=settings.vision_workers)
+_vision = (
+    VisionClient(settings.vision_base_url, settings.vision_model)
+    if settings.vision_base_url
+    else None
+)
 
 
 # --- processing -------------------------------------------------------------
@@ -57,6 +66,31 @@ def _crop_meta(result: RecordResult, crop_dir: Path) -> list[dict]:
     return out
 
 
+def _finish_record(record_id: str, batch_id: str, result: RecordResult) -> None:
+    crops = _crop_meta(result, store.batch_media_dir(batch_id) / record_id)
+    store.record_done(
+        record_id,
+        ttb_id=result.form.ttb_id,
+        auto_status=result.auto_status or "Needs Review",
+        form=dataclasses.asdict(result.form),
+        crops=crops,
+        verdicts=[dataclasses.asdict(v) for v in result.verdicts],
+        warning=dataclasses.asdict(result.warning) if result.warning else None,
+        escalation=result.escalation_reasons,
+    )
+
+
+def _escalate_record(record_id: str, batch_id: str, result: RecordResult) -> None:
+    try:
+        escalate(result, _vision)
+    except Exception:
+        pass  # Tier B trouble degrades to Tier A verdicts (review), never an error
+    try:
+        _finish_record(record_id, batch_id, result)
+    except Exception as e:
+        store.record_error(record_id, f"{type(e).__name__}: {e}")
+
+
 def _process_record(record_id: str, batch_id: str, pdf_path: Path) -> None:
     store.record_processing(record_id)
     try:
@@ -64,17 +98,12 @@ def _process_record(record_id: str, batch_id: str, pdf_path: Path) -> None:
         if not result.ok:
             store.record_error(record_id, "; ".join(result.errors))
             return
-        crops = _crop_meta(result, store.batch_media_dir(batch_id) / record_id)
-        store.record_done(
-            record_id,
-            ttb_id=result.form.ttb_id,
-            auto_status=result.auto_status or "Needs Review",
-            form=dataclasses.asdict(result.form),
-            crops=crops,
-            verdicts=[dataclasses.asdict(v) for v in result.verdicts],
-            warning=dataclasses.asdict(result.warning) if result.warning else None,
-            escalation=result.escalation_reasons,
-        )
+        if _vision and result.escalation_reasons:
+            # Stays "processing" while it waits its turn for Tier B; the
+            # rest of the batch keeps streaming.
+            _vision_executor.submit(_escalate_record, record_id, batch_id, result)
+            return
+        _finish_record(record_id, batch_id, result)
     except Exception as e:  # never lose a record silently
         store.record_error(record_id, f"{type(e).__name__}: {e}")
 

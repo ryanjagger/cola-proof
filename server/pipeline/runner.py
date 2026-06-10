@@ -34,6 +34,7 @@ from .match import (
 )
 from .ocr import OcrResult, ocr_crop
 from .parse_form import ParsedForm, parse_form
+from .vision import VisionClient, VisionResult
 from .warning import WarningResult, WarningStatus, validate_warning_across
 
 # Tier A trust thresholds that trigger Tier B (phase 6).
@@ -55,6 +56,7 @@ class RecordResult:
     form: ParsedForm | None = None
     crops: list[LabelCrop] = field(default_factory=list)
     ocr: list[OcrResult] = field(default_factory=list)  # parallel to crops
+    vision: dict[int, VisionResult] = field(default_factory=dict)  # by crop index
     verdicts: list[Verdict] = field(default_factory=list)
     warning: WarningResult | None = None
     auto_status: str | None = None  # Pass | Needs Review | Fail
@@ -89,8 +91,9 @@ def process_pdf(path: Path, run_ocr: bool = False) -> RecordResult:
 
 
 def evaluate(result: RecordResult) -> None:
-    """Match OCR text against the form and set auto-status + escalation
-    signals. Expects result.ocr parallel to result.crops."""
+    """Match extracted text against the form and set auto-status +
+    escalation signals. Uses Tier A OCR plus any Tier B transcriptions
+    already gathered (result.vision)."""
     form = result.form
     matchable_texts = [
         o.text
@@ -98,6 +101,12 @@ def evaluate(result: RecordResult) -> None:
         if c.matchable and o.readable
     ]
     all_texts = [o.text for o in result.ocr if o.readable]
+    for c in result.crops:
+        v = result.vision.get(c.index)
+        if v and v.ok and v.combined_text:
+            all_texts.append(v.combined_text)
+            if c.matchable:
+                matchable_texts.append(v.combined_text)
 
     verdicts = []
     verdicts.append(match_name("brand_name", form.brand_name or "", matchable_texts))
@@ -124,10 +133,48 @@ def evaluate(result: RecordResult) -> None:
     result.verdicts = verdicts
 
     result.warning = validate_warning_across(all_texts)
+    if result.warning.status == WarningStatus.EXACT and result.vision:
+        # Corroboration rule: the statutory warning is memorized
+        # boilerplate, so a vision model can fabricate it wholesale. If
+        # Tier A saw nothing warning-like anywhere (it alone produced no
+        # match at all), a vision-only "exact" is demoted to near ->
+        # review rather than auto-passing.
+        tier_a_only = validate_warning_across(
+            [o.text for o in result.ocr if o.readable]
+        )
+        if tier_a_only.score < 55:
+            result.warning = WarningResult(
+                WarningStatus.NEAR, result.warning.found_text, result.warning.score
+            )
     outcomes = [v.outcome for v in verdicts]
     outcomes.append(_WARNING_OUTCOME[result.warning.status])
     result.auto_status = aggregate_outcomes(outcomes)
     result.escalation_reasons = _escalation_reasons(result)
+
+
+def escalate(result: RecordResult, client: VisionClient, max_crops: int = 3) -> None:
+    """Tier B: re-read the doubtful crops with the vision model, then
+    re-evaluate the record on the richer text pool.
+
+    Crop choice: matchable crops first (front/back carry the fields);
+    'other' crops (strips, necks) only when the warning still isn't exact,
+    since the warning is often printed there. Per-crop failures and
+    timeouts are swallowed — the record just keeps its Tier A verdicts and
+    stays in review: couldn't-read-clearly is never a rejection.
+    """
+    warning_open = result.warning and result.warning.status != WarningStatus.EXACT
+    candidates = [c for c in result.crops if c.matchable]
+    if warning_open:
+        others = [c for c in result.crops if not c.matchable]
+        others.sort(key=lambda c: c.px_width * c.px_height, reverse=True)
+        candidates.extend(others)
+
+    for crop in candidates[:max_crops]:
+        vr = client.read_crop(crop.data, crop.ext)
+        result.vision[crop.index] = vr
+
+    if any(v.ok for v in result.vision.values()):
+        evaluate(result)
 
 
 def _container_wording_fallback(verdict, rematch, form: ParsedForm):
@@ -234,21 +281,34 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("pdfs", nargs="+", type=Path)
     ap.add_argument("--out", type=Path, default=Path("out/crops"))
     ap.add_argument("--no-ocr", action="store_true", help="parse/extract only")
+    ap.add_argument(
+        "--vision",
+        metavar="BASE_URL",
+        help="Tier B endpoint (e.g. http://localhost:8090/v1); enables escalation",
+    )
     args = ap.parse_args(argv)
+    client = VisionClient(args.vision, "qwen2.5-vl-3b") if args.vision else None
 
     failures = 0
     n_crops = 0
     statuses: dict[str, int] = {}
     escalations = 0
+    tier_b_crops = 0
+    tier_b_ms = 0
     for path in args.pdfs:
         result = process_pdf(path, run_ocr=not args.no_ocr)
+        needed_escalation = result.ok and bool(result.escalation_reasons)
+        if client and needed_escalation:
+            escalate(result, client)
+            tier_b_crops += len(result.vision)
+            tier_b_ms += sum(v.elapsed_ms for v in result.vision.values())
         _print_record(result)
         if result.ok:
             write_crops(result, args.out)
             n_crops += len(result.crops)
             if result.auto_status:
                 statuses[result.auto_status] = statuses.get(result.auto_status, 0) + 1
-            if result.escalation_reasons:
+            if needed_escalation:
                 escalations += 1
         else:
             failures += 1
@@ -260,7 +320,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     if statuses:
         summary = " · ".join(f"{k}: {v}" for k, v in sorted(statuses.items()))
-        print(f"auto-status: {summary} · would escalate: {escalations}")
+        verb = "escalated" if client else "would escalate"
+        print(f"auto-status: {summary} · {verb}: {escalations}")
+    if tier_b_crops:
+        print(
+            f"tier B: {tier_b_crops} crops read, "
+            f"{tier_b_ms / tier_b_crops / 1000:.1f}s avg per crop"
+        )
     return 1 if failures else 0
 
 

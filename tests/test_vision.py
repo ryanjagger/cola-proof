@@ -1,0 +1,195 @@
+"""Tier B client and escalation tests (spec phase-6) using a mocked
+OpenAI-compatible endpoint — no model needed."""
+
+import json
+from pathlib import Path
+
+import httpx
+import pytest
+
+from server.pipeline.extract_labels import LabelCrop
+from server.pipeline.match import Outcome
+from server.pipeline.ocr import OcrResult
+from server.pipeline.parse_form import ParsedForm
+from server.pipeline.runner import RecordResult, escalate, evaluate
+from server.pipeline.vision import VisionClient, VisionResult
+from server.pipeline.warning import STATUTORY_BODY, STATUTORY_PREFIX, WarningStatus
+
+CANONICAL_WARNING = f"{STATUTORY_PREFIX} {STATUTORY_BODY}"
+
+
+def _client(handler) -> VisionClient:
+    return VisionClient(
+        "http://vision.test/v1", "test-model",
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def _completion(payload: dict) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={"choices": [{"message": {"content": json.dumps(payload)}}]},
+    )
+
+
+def test_read_crop_parses_structured_transcription():
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        # JSON-schema-constrained output must be requested.
+        assert body["response_format"]["type"] == "json_schema"
+        assert body["temperature"] == 0
+        return _completion(
+            {
+                "brand_text": "Viejo Tonel",
+                "abv_text": "Alc. 42% by Vol",
+                "net_contents_text": "750 ml",
+                "warning_text": CANONICAL_WARNING,
+                "full_text": "PISCO ITALIA",
+            }
+        )
+
+    r = _client(handler).read_crop(b"fakejpeg", "jpeg")
+    assert r.ok
+    assert r.brand_text == "Viejo Tonel"
+    assert "42%" in r.abv_text
+    assert CANONICAL_WARNING in r.combined_text
+
+
+def test_read_crop_degrades_on_http_error():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    r = _client(handler).read_crop(b"fakejpeg", "jpeg")
+    assert not r.ok
+    assert r.error
+    assert r.combined_text == ""
+
+
+def test_read_crop_degrades_on_garbage_payload():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"unexpected": True})
+
+    r = _client(handler).read_crop(b"fakejpeg", "jpeg")
+    assert not r.ok
+
+
+def test_unconfigured_client_reports_not_configured():
+    r = VisionClient("", "m").read_crop(b"x", "jpeg")
+    assert not r.ok
+    assert "not configured" in r.error
+
+
+# --- escalation -------------------------------------------------------------
+
+
+def _crop(index: int, kind: str) -> LabelCrop:
+    return LabelCrop(
+        index=index, caption_type=kind, kind=kind, width_in=3.0, height_in=4.0,
+        px_width=300, px_height=400, dpi=100, page=1, ext="jpeg", data=b"img",
+        aspect_ok=True,
+    )
+
+
+def _record() -> RecordResult:
+    """A pre-2016 record whose front label OCRed too poorly to match."""
+    form = ParsedForm(
+        ttb_id="x", brand_name="VIEJO TONEL", serial_number="1",
+        net_contents="750 MILLILITERS", alcohol_content="42",
+        class_type_description="OTHER GRAPE BRANDY (PISCO, GRAPPA) FB",
+        has_net_contents_field=True, has_alcohol_content_field=True,
+    )
+    result = RecordResult(path=Path("x.pdf"), form=form)
+    result.crops = [_crop(0, "front"), _crop(1, "back")]
+    result.ocr = [
+        OcrResult(text="", words=[], mean_conf=0.0, low_conf_fraction=1.0),
+        OcrResult(text="unreadable noise", words=[("noise", 40.0)],
+                  mean_conf=40.0, low_conf_fraction=1.0),
+    ]
+    evaluate(result)
+    return result
+
+
+class FakeVision:
+    def __init__(self, result: VisionResult):
+        self.result = result
+        self.crops_read: list[int] = []
+
+    def read_crop(self, data: bytes, ext: str) -> VisionResult:
+        self.crops_read.append(1)
+        return self.result
+
+
+def test_escalation_upgrades_corroborated_record_to_pass():
+    record = _record()
+    assert record.auto_status == "Needs Review"
+    assert record.escalation_reasons
+    # Tier A partially read the warning on the back label (a typical
+    # dense-small-print read): corroborates Tier B's exact transcription.
+    mangled = CANONICAL_WARNING.replace("Surgeon", "Surge0n").replace(
+        "machinery", "rnachinery"
+    )
+    record.ocr[1] = OcrResult(
+        text=mangled, words=[("x", 70.0)], mean_conf=70.0, low_conf_fraction=0.4
+    )
+    evaluate(record)
+    assert record.warning.status == WarningStatus.NEAR
+
+    fake = FakeVision(VisionResult(
+        ok=True, brand_text="Pisco Viejo Tonel", abv_text="Alc. 42% by Vol",
+        net_contents_text="750 ml", warning_text=CANONICAL_WARNING,
+        full_text="PISCO product of Peru",
+    ))
+    escalate(record, fake)
+    assert record.auto_status == "Pass"
+    assert record.warning.status == WarningStatus.EXACT
+    assert all(v.outcome == Outcome.EXACT for v in record.verdicts)
+
+
+def test_uncorroborated_vision_warning_stays_in_review():
+    """The statutory warning is memorized boilerplate a vision model can
+    fabricate. If Tier A saw nothing warning-like, a vision-only exact
+    must not auto-pass the record."""
+    record = _record()
+    fake = FakeVision(VisionResult(
+        ok=True, brand_text="Pisco Viejo Tonel", abv_text="Alc. 42% by Vol",
+        net_contents_text="750 ml", warning_text=CANONICAL_WARNING,
+        full_text="PISCO product of Peru",
+    ))
+    escalate(record, fake)
+    # Fields upgrade on the model's transcription...
+    assert all(v.outcome == Outcome.EXACT for v in record.verdicts)
+    # ...but the warning is demoted to near -> the agent verifies it.
+    assert record.warning.status == WarningStatus.NEAR
+    assert record.auto_status == "Needs Review"
+
+
+def test_escalation_failure_keeps_tier_a_verdicts():
+    record = _record()
+    before = [v.outcome for v in record.verdicts]
+    fake = FakeVision(VisionResult(ok=False, error="timeout"))
+    escalate(record, fake)
+    # Honest degradation: still Needs Review, never an error or a reject.
+    assert record.auto_status == "Needs Review"
+    assert [v.outcome for v in record.verdicts] == before
+
+
+def test_escalation_reads_other_crops_only_when_warning_open():
+    record = _record()
+    record.crops.append(_crop(2, "other"))
+    record.ocr.append(OcrResult(text="", words=[]))
+
+    fake = FakeVision(VisionResult(ok=True, full_text="nothing useful"))
+    escalate(record, fake, max_crops=5)
+    # warning unresolved -> matchable crops AND the 'other' strip read
+    assert set(record.vision.keys()) == {0, 1, 2}
+
+    record2 = _record()
+    record2.crops.append(_crop(2, "other"))
+    record2.ocr.append(OcrResult(text=CANONICAL_WARNING, words=[("x", 95.0)],
+                                 mean_conf=95.0, low_conf_fraction=0.0))
+    evaluate(record2)
+    assert record2.warning.status == WarningStatus.EXACT
+    fake2 = FakeVision(VisionResult(ok=True, full_text="nothing useful"))
+    escalate(record2, fake2, max_crops=5)
+    # warning already exact -> only matchable crops are re-read
+    assert set(record2.vision.keys()) == {0, 1}

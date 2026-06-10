@@ -1,0 +1,31 @@
+# Stage 1: build the SPA
+FROM node:22-slim AS web
+WORKDIR /build
+COPY web/package.json web/package-lock.json ./
+# npm ci is too strict across npm versions for the wasm optional deps
+# (@emnapi/*) that tailwind's oxide pulls in; install still honors the lock.
+RUN npm install --no-audit --no-fund
+COPY web/ ./
+RUN npm run build
+
+# Stage 2: python runtime with Tesseract + language packs
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        tesseract-ocr \
+        tesseract-ocr-spa tesseract-ocr-ita tesseract-ocr-fra \
+        tesseract-ocr-por tesseract-ocr-deu \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+COPY server/ server/
+COPY --from=web /build/dist/ web/dist/
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    DATA_DIR=/data \
+    PORT=8000
+VOLUME /data
+EXPOSE 8000
+CMD ["sh", "-c", "uvicorn server.app:app --host 0.0.0.0 --port ${PORT}"]

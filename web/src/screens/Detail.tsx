@@ -20,10 +20,16 @@ import {
   warningHeadline,
 } from '../plain'
 
-// Dev-only wording — deliberately not in plain.ts, agents never see it.
-const SOURCE_LABELS: Record<string, string> = {
+// Reader names. Agents see the short tag next to "Read from label";
+// the dev attribution line spells out the form fallback.
+const READER_TAGS: Record<string, string> = {
   ocr: 'OCR',
   vision: 'Vision',
+  form: 'Form',
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  ...READER_TAGS,
   form: 'Form (container wording)',
 }
 
@@ -291,7 +297,14 @@ function VerdictCard({
         </div>
         <div>
           <dt className="text-xs uppercase tracking-wide text-stone-500">
-            Read from label{v.normalized && ' (normalized)'}
+            Read from label
+            {(() => {
+              const tags = [
+                v.label_value && v.source ? READER_TAGS[v.source] : null,
+                v.normalized ? 'normalized' : null,
+              ].filter(Boolean)
+              return tags.length ? ` (${tags.join(', ')})` : ''
+            })()}
           </dt>
           <dd className="mt-0.5 font-mono">
             {v.label_value ?? <span className="text-stone-400">nothing found</span>}

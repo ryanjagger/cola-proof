@@ -223,7 +223,7 @@ function RowStatus({ record: r }: { record: RecordRow }) {
   if (r.state === 'escalating')
     return (
       <span className={`${CHIP} bg-stone-100 font-normal text-stone-500`}>
-        Getting a second read…
+        Re-reading with AI…
       </span>
     )
   if (r.state !== 'done') return <VerdictPill status={null} />

@@ -6,6 +6,7 @@ import {
   listRecords,
   pdfUrl,
   setDisposition,
+  type Box,
   type RecordRow,
   type Verdict,
 } from '../api'
@@ -41,6 +42,13 @@ export default function Detail() {
   // null = "no explicit choice yet": the viewer falls back to the first
   // crop. Verdict cards set it so "crop N" refs select the crop they cite.
   const [selectedCrop, setSelectedCrop] = useState<number | 'pdf' | null>(null)
+  // Where the clicked card's value was read, drawn over the crop image.
+  const [highlight, setHighlight] = useState<{ crop: number; box: Box } | null>(null)
+
+  function showOnCrop(crop: number, box?: Box | null) {
+    setSelectedCrop(crop)
+    setHighlight(box ? { crop, box } : null)
+  }
 
   useEffect(() => {
     if (!recordId) return
@@ -48,6 +56,7 @@ export default function Detail() {
     setError(null)
     setSaving(false)
     setSelectedCrop(null)
+    setHighlight(null)
     getRecord(recordId).then((r) => {
       setRecord(r)
       setNote(r.note ?? '')
@@ -134,9 +143,9 @@ export default function Detail() {
         {/* Left: verdicts */}
         <section className="space-y-3">
           {(record.verdicts ?? []).map((v) => (
-            <VerdictCard key={v.field} verdict={v} dev={dev} onShowCrop={setSelectedCrop} />
+            <VerdictCard key={v.field} verdict={v} dev={dev} onShowCrop={showOnCrop} />
           ))}
-          <WarningCard record={record} dev={dev} onShowCrop={setSelectedCrop} />
+          <WarningCard record={record} dev={dev} onShowCrop={showOnCrop} />
           {dev && <EscalationCard record={record} />}
         </section>
 
@@ -145,7 +154,11 @@ export default function Detail() {
           record={record}
           dev={dev}
           selected={selectedCrop}
-          onSelect={setSelectedCrop}
+          onSelect={(s) => {
+            setSelectedCrop(s)
+            setHighlight(null)
+          }}
+          highlight={highlight}
         />
       </div>
 
@@ -222,10 +235,23 @@ function outcomeStyle(v: Verdict): string {
   }
 }
 
-function CropRef({ index, onShowCrop }: { index: number; onShowCrop: (i: number) => void }) {
+type ShowOnCrop = (crop: number, box?: Box | null) => void
+
+function CropRef({
+  index,
+  box,
+  onShowCrop,
+}: {
+  index: number
+  box?: Box | null
+  onShowCrop: ShowOnCrop
+}) {
   return (
     <button
-      onClick={() => onShowCrop(index)}
+      onClick={(e) => {
+        e.stopPropagation()
+        onShowCrop(index, box)
+      }}
       title="Show this crop in the viewer"
       className="underline decoration-dotted underline-offset-2 hover:text-stone-700"
     >
@@ -241,10 +267,17 @@ function VerdictCard({
 }: {
   verdict: Verdict
   dev: boolean
-  onShowCrop: (i: number) => void
+  onShowCrop: ShowOnCrop
 }) {
+  const clickable = v.source_crop != null
   return (
-    <div className={`rounded-xl border p-4 ${outcomeStyle(v)}`}>
+    <div
+      onClick={clickable ? () => onShowCrop(v.source_crop!, v.box) : undefined}
+      title={clickable ? 'Show where this was read on the label' : undefined}
+      className={`rounded-xl border p-4 ${outcomeStyle(v)} ${
+        clickable ? 'cursor-pointer transition-shadow hover:shadow' : ''
+      }`}
+    >
       <div className="flex items-baseline justify-between">
         <h3 className="font-medium">{fieldLabel(v.field)}</h3>
         <span className="text-sm text-stone-600">{verdictSentence(v)}</span>
@@ -267,7 +300,7 @@ function VerdictCard({
             <p className="mt-1 font-mono text-xs text-stone-500">
               {v.label_value ? sourceLabel(v.source) : '—'}
               {v.source_crop != null && (
-                <> · <CropRef index={v.source_crop} onShowCrop={onShowCrop} /></>
+                <> · <CropRef index={v.source_crop} box={v.box} onShowCrop={onShowCrop} /></>
               )}
               {v.score != null && <> · score {v.score.toFixed(1)}</>}
               {v.normalized && ' · normalized'}
@@ -286,15 +319,18 @@ function WarningCard({
 }: {
   record: RecordRow
   dev: boolean
-  onShowCrop: (i: number) => void
+  onShowCrop: ShowOnCrop
 }) {
   const w = record.warning
   const ok = w?.status === 'exact'
+  const clickable = w?.source_crop != null
   return (
     <div
+      onClick={clickable ? () => onShowCrop(w!.source_crop!, w!.box) : undefined}
+      title={clickable ? 'Show where this was read on the label' : undefined}
       className={`rounded-xl border p-4 ${
         ok ? 'border-green-200 bg-green-50/40' : 'border-amber-300 bg-amber-50/50'
-      }`}
+      } ${clickable ? 'cursor-pointer transition-shadow hover:shadow' : ''}`}
     >
       <div className="flex items-baseline justify-between">
         <h3 className="font-medium">Government warning</h3>
@@ -314,7 +350,7 @@ function WarningCard({
         <p className="mt-2 font-mono text-xs text-stone-500">
           read by: {w.found_text ? sourceLabel(w.source) : '—'}
           {w.source_crop != null && (
-            <> · <CropRef index={w.source_crop} onShowCrop={onShowCrop} /></>
+            <> · <CropRef index={w.source_crop} box={w.box} onShowCrop={onShowCrop} /></>
           )}
           {' · score '}
           {w.score.toFixed(1)}
@@ -348,16 +384,19 @@ function CropViewer({
   dev,
   selected: selectedProp,
   onSelect,
+  highlight,
 }: {
   record: RecordRow
   dev: boolean
   selected: number | 'pdf' | null
   onSelect: (s: number | 'pdf') => void
+  highlight: { crop: number; box: Box } | null
 }) {
   const crops = record.crops ?? []
   const selected = selectedProp ?? (crops.length ? crops[0].index : 'pdf')
   const [zoom, setZoom] = useState(false)
   const crop = selected === 'pdf' ? null : crops.find((c) => c.index === selected)
+  const box = highlight && highlight.crop === selected ? highlight.box : null
 
   useEffect(() => setZoom(false), [selected])
 
@@ -408,12 +447,27 @@ function CropViewer({
       </div>
       {crop ? (
         <div className="overflow-auto rounded-xl border border-stone-200 bg-white p-2" style={{ maxHeight: '70vh' }}>
-          <img
-            src={cropUrl(record.id, crop.index)}
-            alt={crop.caption_type}
-            onClick={() => setZoom((z) => !z)}
-            className={`mx-auto cursor-zoom-in ${zoom ? 'w-[250%] max-w-none cursor-zoom-out' : 'max-h-[66vh] object-contain'}`}
-          />
+          {/* The wrapper hugs the img exactly, so the percent-positioned
+              highlight tracks the image at any zoom level. */}
+          <div className={`relative ${zoom ? 'w-[250%] max-w-none' : 'mx-auto w-fit'}`}>
+            <img
+              src={cropUrl(record.id, crop.index)}
+              alt={crop.caption_type}
+              onClick={() => setZoom((z) => !z)}
+              className={`block ${zoom ? 'w-full cursor-zoom-out' : 'max-h-[66vh] cursor-zoom-in'}`}
+            />
+            {box && (
+              <div
+                className="pointer-events-none absolute rounded-sm border-2 border-amber-500 bg-amber-400/15"
+                style={{
+                  left: `${box[0] * 100}%`,
+                  top: `${box[1] * 100}%`,
+                  width: `${(box[2] - box[0]) * 100}%`,
+                  height: `${(box[3] - box[1]) * 100}%`,
+                }}
+              />
+            )}
+          </div>
         </div>
       ) : (
         <iframe

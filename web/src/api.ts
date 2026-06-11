@@ -4,6 +4,9 @@ export type Outcome = 'exact' | 'near_miss' | 'mismatch' | 'missing'
 // before source attribution existed.
 export type VerdictSource = 'ocr' | 'vision' | 'form'
 
+// (x0, y0, x1, y1) as fractions of the crop; scales with any display size.
+export type Box = [number, number, number, number]
+
 export interface Verdict {
   field: string
   form_value: string | null
@@ -14,6 +17,8 @@ export interface Verdict {
   note: string | null
   source?: VerdictSource | null
   source_crop?: number | null
+  // Where label_value was read on the crop; OCR-sourced verdicts only.
+  box?: Box | null
 }
 
 export interface WarningResult {
@@ -23,11 +28,12 @@ export interface WarningResult {
   note?: string | null // absent on records processed before notes existed
   source?: VerdictSource | null
   source_crop?: number | null
+  box?: Box | null
 }
 
 export interface Crop {
   index: number
-  kind: 'front' | 'back' | 'other'
+  kind: 'front' | 'back' | 'other' | 'photo'
   caption_type: string
   width_in: number
   height_in: number

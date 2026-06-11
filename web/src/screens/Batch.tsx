@@ -148,7 +148,7 @@ export default function Batch() {
             }}
             className="whitespace-nowrap rounded-lg bg-white px-3 py-1 text-sm text-red-700 ring-1 ring-red-200 hover:bg-red-50"
           >
-            Delete &amp; purge
+            Delete
           </button>
         </div>
       </div>

@@ -16,11 +16,19 @@ services:
       - vision
 
   vision:
-    image: ghcr.io/ggml-org/llama.cpp:server
+    # Pinned build: the mutable `:server` tag is a nightly and has shipped
+    # heap-corruption crashes mid-request.
+    image: ghcr.io/ggml-org/llama.cpp:server-b9570
     # No `ports:` on purpose — reachable only on the compose network.
+    # One slot + small ctx: requests queue server-side instead of splitting
+    # CPU; the app's VISION_WORKERS bounds them anyway. Image-token cap
+    # bounds the (CPU-expensive) vision encode on large crops. If you set
+    # a CPU limit on this container, add `--threads <that limit>` —
+    # llama.cpp autodetects host cores and thrashes a smaller quota.
     command: >
       -hf ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M
       --host 0.0.0.0 --port 8080
+      --parallel 1 --ctx-size 8192 --image-max-tokens 512
     volumes:
       - llama-cache:/root/.cache/llama.cpp
 

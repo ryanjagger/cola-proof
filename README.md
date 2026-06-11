@@ -85,6 +85,7 @@ files. The CSV/PDF export is the durable artifact.
 ```bash
 uv run pytest                                            # full suite
 uv run python -m server.pipeline.runner sample-forms/registry/*.pdf   # corpus run, Tier A
+uv run python -m server.pipeline.runner sample-forms/applications/*.pdf  # 04/2023 fillable-form corpus
 uv run python -m server.pipeline.runner sample-forms/registry/*.pdf \
     --vision http://127.0.0.1:8090/v1                    # with Tier B
 uv run python -m server.pipeline.runner sample-forms/registry/*.pdf --no-ocr  # parse/extract only

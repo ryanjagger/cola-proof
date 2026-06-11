@@ -16,7 +16,7 @@ COLA Proof: a local-first batch tool for TTB compliance agents. It ingests appro
 Other contents:
 
 - `sample-forms/registry/` — 30 real COLA PDFs from the COLA Public Registry print view; the test corpus for every phase. Covers both form revisions and non-English imports.
-- `sample-forms/applications/` — 10 filled TTB F 5100.31 (04/2023) application PDFs, a different shape from the registry print view: legal-size, 5 pages (last 4 are static instructions), data as flat text on page 1 (AcroForm widgets hold only form furniture), label images affixed on page 1. Six have individual label images with typed FRONT/BACK/NECK captions; four embed a single uncaptioned photo of physical bottles. Not yet supported by the pipeline.
+- `sample-forms/applications/` — 10 filled TTB F 5100.31 (04/2023) application PDFs, a different shape from the registry print view: legal-size, 5 pages (last 4 are static instructions), data as flat text on page 1 (AcroForm widgets hold only form furniture), label images affixed on page 1. Six have individual label images with typed FRONT/BACK/NECK captions; four embed a single uncaptioned photo of physical bottles.
 - `cola-proof/` — empty accidental `git init` scaffold (zero commits). The plan says to remove it; build at repo root under `server/` and `web/`. The repo root is already a git repo — do not nest another.
 
 ## Planned stack & commands (from implementation-plan.md)
@@ -34,6 +34,7 @@ Per-record pipeline (`server/pipeline/`): parse Part I form fields from the PDF 
 Key facts that shape the code:
 
 - **Two form revisions.** Pre-2016 forms carry typed NET CONTENTS and ALCOHOL CONTENT fields; the 06-2016 revision drops both. The parser needs a per-revision field map, and for 2016+ records ABV/net-contents become label-format checks ("present and plausible"), not form-vs-label matches — and the UI must say so.
+- **Two PDF shapes.** `detect_shape` splits registry print views from bare 04/2023 fillable applications (same form, different rendering). Applications have no TTB ID/status/class-type — nothing has been approved yet — and follow the 06-2016 label-format-check policy. Labels affixed as a single uncaptioned photograph of the containers become crop kind `photo`: always escalated to Tier B, never auto-Passed on Tier A alone.
 - **Auto-status vs disposition are separate fields.** Pipeline sets `auto_status` (Pass / Needs Review / Fail); the agent (or system default) sets `disposition` (Approved / Rejected + `dispositioned_by`, timestamp, note). Their disagreement is the audit signal — never merge them.
 - **Escalation triggers** (the design's core): low OCR word confidence, required field empty/malformed, or warning *almost* matching. Effective DPI (pixel dims ÷ caption inches) is a free trust signal.
 - **Data lifecycle**: uploaded PDFs and crops live in a per-batch temp media dir, purged on batch delete; SQLite stores decision metadata only; the CSV/PDF export is the durable artifact.

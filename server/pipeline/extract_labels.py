@@ -1,7 +1,8 @@
 """Caption-paired label image extraction from COLA PDFs.
 
-Label pages follow the "AFFIX COMPLETE SET OF LABELS BELOW" marker. Each
-label image is preceded (in document order) by a text caption:
+Registry shape: label pages follow the "AFFIX COMPLETE SET OF LABELS
+BELOW" marker. Each label image is preceded (in document order) by a text
+caption:
 
     Image Type:
     Brand (front) or keg collar
@@ -13,9 +14,17 @@ the head of the next), so pairing must run over the whole document, never
 per page. The only non-label image in the label region's pages is the TTB
 stamp banner, which sits *above* the AFFIX marker on the marker's page.
 
+Application shape (bare 04/2023 form): images are affixed directly in the
+AFFIX area at the foot of page 1, with a typed one-word caption (FRONT /
+BACK / NECK) just below each image — or no caption at all when the
+applicant pasted in a single photograph of the physical containers. An
+uncaptioned image becomes kind "photo": there is nothing deterministic to
+crop or classify, so the runner always hands it to Tier B.
+
 Label images are JPEG XObjects; raw bytes are extracted without
-recompression. Pixel dims / caption inches gives effective DPI — a free
-OCR trust signal used by escalation later in the pipeline.
+recompression. Pixel dims / caption inches (registry) or placement inches
+(application) gives effective DPI — a free OCR trust signal used by
+escalation later in the pipeline.
 """
 
 from __future__ import annotations
@@ -25,7 +34,13 @@ from dataclasses import dataclass
 
 import fitz
 
-from .parse_form import AFFIX_MARKER, _find_affix_page
+from .parse_form import (
+    AFFIX_MARKER,
+    _app_template,
+    _find_affix_page,
+    _spans,
+    detect_shape,
+)
 
 CAPTION_RE = re.compile(
     r"Image Type:\s*(?P<type>.*?)\s*"
@@ -59,10 +74,14 @@ class LabelCrop:
 
     @property
     def matchable(self) -> bool:
-        return self.kind in ("front", "back")
+        # A photo of the containers carries the front/back labels too —
+        # it joins matching, but only after Tier B has read it.
+        return self.kind in ("front", "back", "photo")
 
 
 def extract_labels(doc: fitz.Document) -> list[LabelCrop]:
+    if detect_shape(doc) == "application":
+        return _extract_application(doc)
     affix_page = _find_affix_page(doc)
     if affix_page is None:
         raise ValueError("no label section: AFFIX marker not found")
@@ -98,6 +117,69 @@ def extract_labels(doc: fitz.Document) -> list[LabelCrop]:
                 ext=info["ext"],
                 data=info["image"],
                 aspect_ok=aspect_ok,
+            )
+        )
+    return crops
+
+
+def _extract_application(doc: fitz.Document) -> list[LabelCrop]:
+    """Application shape: images below the AFFIX marker on the form page,
+    classified by the typed caption just under each image rect. DPI comes
+    from the placement rect — the size the label occupies on the form,
+    which is what the reviewer (and OCR) actually gets."""
+    affix_page = _find_affix_page(doc)
+    if affix_page is None:
+        raise ValueError("no label section: AFFIX marker not found")
+    page = doc[affix_page]
+    marker_y = page.search_for(AFFIX_MARKER)[0].y1
+
+    placements = []
+    for img in page.get_images(full=True):
+        xref = img[0]
+        for rect in page.get_image_rects(xref):
+            if rect.y0 > marker_y:
+                placements.append((rect, xref))
+    placements.sort(key=lambda p: (p[0].y0, p[0].x0))
+
+    typed = [
+        s
+        for s in _spans(page, template=_app_template)
+        if not s.template and s.y0 > marker_y
+    ]
+    crops = []
+    for i, (rect, xref) in enumerate(placements):
+        caption = " ".join(
+            s.text
+            for s in typed
+            if rect.y1 - 2 <= s.y0 <= rect.y1 + 20
+            and rect.x0 - 5 <= (s.x0 + s.x1) / 2 <= rect.x1 + 5
+        ).strip()
+        up = caption.upper()
+        if not caption:
+            kind = "photo"
+        elif "FRONT" in up:
+            kind = "front"
+        elif "BACK" in up:
+            kind = "back"
+        else:
+            kind = "other"
+        info = doc.extract_image(xref)
+        px_w, px_h = info["width"], info["height"]
+        w_in, h_in = rect.width / 72, rect.height / 72
+        crops.append(
+            LabelCrop(
+                index=i,
+                caption_type=caption or "(uncaptioned photograph)",
+                kind=kind,
+                width_in=round(w_in, 2),
+                height_in=round(h_in, 2),
+                px_width=px_w,
+                px_height=px_h,
+                dpi=round(min(px_w / w_in, px_h / h_in)),
+                page=affix_page,
+                ext=info["ext"],
+                data=info["image"],
+                aspect_ok=abs(px_w / px_h - w_in / h_in) / (w_in / h_in) < 0.25,
             )
         )
     return crops

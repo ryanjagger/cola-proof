@@ -178,6 +178,17 @@ def evaluate(result: RecordResult) -> None:
     outcomes = [v.outcome for v in verdicts]
     outcomes.append(_WARNING_OUTCOME[result.warning.status])
     result.auto_status = aggregate_outcomes(outcomes)
+    # A photograph of the containers is never trusted on Tier A alone:
+    # labels in a photo sit at an angle under glare, so Tesseract
+    # agreement there is luck, not evidence. Until the backup reader has
+    # read the photo, the record can at best be Needs Review.
+    photo_unread = any(
+        c.kind == "photo"
+        and not ((v := result.vision.get(c.index)) is not None and v.ok)
+        for c in result.crops
+    )
+    if photo_unread and result.auto_status == "Pass":
+        result.auto_status = "Needs Review"
     result.escalation_reasons = _escalation_reasons(result)
 
 
@@ -250,6 +261,11 @@ def _container_wording_fallback(verdict, rematch, form: ParsedForm):
 
 def _escalation_reasons(result: RecordResult) -> list[str]:
     reasons = []
+    for c in result.crops:
+        # Labels affixed as a photograph of the containers always get the
+        # backup reader — there is no per-label crop for Tier A to trust.
+        if c.kind == "photo":
+            reasons.append(f"crop {c.index} is a photograph of the containers")
     for c, o in zip(result.crops, result.ocr):
         if not c.matchable:
             continue
@@ -289,6 +305,7 @@ def _print_record(result: RecordResult) -> None:
     f = result.form
     if f:
         rows = [
+            ("shape", f.shape),
             ("ttb_id", f.ttb_id),
             ("revision", f.revision),
             ("status", f.status),

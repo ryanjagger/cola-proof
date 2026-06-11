@@ -106,6 +106,9 @@ def evaluate(result: RecordResult) -> None:
         if not c.matchable and o.readable
     ]
     all_texts = [o.text for o in result.ocr if o.readable]
+    # Tier A's reading pool, kept aside before vision text is mixed in:
+    # the numeric corroboration rule below needs to ask what OCR alone saw.
+    tier_a_numeric_texts = matchable_texts + other_texts
     for c in result.crops:
         v = result.vision.get(c.index)
         if v and v.ok and v.combined_text:
@@ -142,6 +145,8 @@ def evaluate(result: RecordResult) -> None:
         verdicts.append(
             match_class_type(form.class_type_description, matchable_texts)
         )
+    if result.vision:
+        _demote_vision_only_mismatches(verdicts, form, tier_a_numeric_texts)
     result.verdicts = verdicts
 
     result.warning = validate_warning_across(all_texts)
@@ -193,6 +198,29 @@ def escalate(result: RecordResult, client: VisionClient, max_crops: int = 3) -> 
 
     if any(v.ok for v in result.vision.values()):
         evaluate(result)
+
+
+def _demote_vision_only_mismatches(
+    verdicts: list[Verdict], form: ParsedForm, tier_a_texts: list[str]
+) -> None:
+    """Numeric mirror of the warning corroboration rule: a MISMATCH whose
+    label value exists only in a Tier B transcription is doubt, not
+    evidence — the two readers never agreed on anything. A small VLM
+    misreads hard label art (Cotton Hollow's "750ml" came back as
+    "500 ml"), and a fabricated volume must not flip an unreadable field
+    into a Fail recommendation. Demoted to near-miss -> Needs Review."""
+    rematchers = {
+        "net_contents": lambda texts: match_net_contents(form.net_contents, texts),
+        "alcohol_content": lambda texts: match_abv(form.alcohol_content, texts),
+    }
+    for v in verdicts:
+        if v.outcome != Outcome.MISMATCH or v.field not in rematchers:
+            continue
+        if v.form_value is None:  # format checks never mismatch, but be safe
+            continue
+        if rematchers[v.field](tier_a_texts).outcome == Outcome.MISSING:
+            v.outcome = Outcome.NEAR_MISS
+            v.note = "only the backup reader saw this value"
 
 
 def _container_wording_fallback(verdict, rematch, form: ParsedForm):

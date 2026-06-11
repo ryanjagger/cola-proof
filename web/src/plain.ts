@@ -25,6 +25,8 @@ export function verdictSentence(v: Verdict): string {
       if (formatCheck(v)) return 'Found on label and looks reasonable'
       return 'Matches the form'
     case 'near_miss':
+      if (v.note?.includes('backup reader'))
+        return "Couldn't read this clearly — compare with the label image"
       return 'Close to the form but not identical — please check'
     case 'mismatch':
       return `Label disagrees with the form — compare ${name.toLowerCase()} on the label`
@@ -57,7 +59,12 @@ export function recordReasons(r: RecordRow): string[] {
   for (const v of r.verdicts ?? []) {
     if (v.outcome === 'exact') continue
     const name = fieldLabel(v.field)
-    if (v.outcome === 'near_miss') reasons.push(`${name}: close but not identical`)
+    if (v.outcome === 'near_miss')
+      reasons.push(
+        v.note?.includes('backup reader')
+          ? `${name}: couldn't read clearly — verify on the label`
+          : `${name}: close but not identical`,
+      )
     else if (v.outcome === 'mismatch') reasons.push(`${name}: doesn't match the form`)
     else reasons.push(`${name}: couldn't find it on the label`)
   }

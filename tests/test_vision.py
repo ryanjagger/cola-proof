@@ -207,6 +207,39 @@ def test_uncorroborated_vision_warning_stays_in_review():
     assert record.auto_status == "Needs Review"
 
 
+def test_vision_only_numeric_mismatch_demoted_to_review():
+    """Qwen2.5-VL misread Cotton Hollow's '750ml' as '500 ml'. A numeric
+    value born solely from Tier B — Tier A saw no statement at all — is
+    doubt, not evidence: it must land in review, never a Fail."""
+    record = _record()
+    fake = FakeVision(VisionResult(
+        ok=True, brand_text="Viejo Tonel",
+        abv_text="Alc. 35% by Vol",  # form says 42
+        net_contents_text="500 ml",  # form says 750 MILLILITERS
+    ))
+    escalate(record, fake)
+    by_field = {v.field: v for v in record.verdicts}
+    assert by_field["net_contents"].outcome == Outcome.NEAR_MISS
+    assert by_field["net_contents"].label_value == "500 ml"  # still shown
+    assert by_field["alcohol_content"].outcome == Outcome.NEAR_MISS
+    assert record.auto_status == "Needs Review"
+
+
+def test_corroborated_numeric_mismatch_still_fails():
+    """When Tier A itself read a volume that contradicts the form, Tier B
+    agreeing is corroboration — the mismatch stands."""
+    record = _record()
+    record.ocr[1] = OcrResult(
+        text="500 ml", words=[("x", 90.0)], mean_conf=90.0, low_conf_fraction=0.0
+    )
+    evaluate(record)
+    fake = FakeVision(VisionResult(ok=True, net_contents_text="500 ml"))
+    escalate(record, fake)
+    by_field = {v.field: v for v in record.verdicts}
+    assert by_field["net_contents"].outcome == Outcome.MISMATCH
+    assert record.auto_status == "Fail"
+
+
 def test_escalation_failure_keeps_tier_a_verdicts():
     record = _record()
     before = [v.outcome for v in record.verdicts]

@@ -112,8 +112,9 @@ def _process_record(record_id: str, batch_id: str, pdf_path: Path) -> None:
             store.record_error(record_id, "; ".join(result.errors))
             return
         if _vision and result.escalation_reasons:
-            # Stays "processing" while it waits its turn for Tier B; the
+            # Marked 'escalating' while it waits its turn for Tier B; the
             # rest of the batch keeps streaming.
+            store.record_escalating(record_id)
             _vision_executor.submit(_escalate_record, record_id, batch_id, result)
             return
         _finish_record(record_id, batch_id, result)
@@ -189,12 +190,15 @@ async def batch_events(batch_id: str) -> StreamingResponse:
         raise HTTPException(404, "batch not found")
 
     async def stream():
-        seen: set[str] = set()
+        # Emit on every state transition (processing -> escalating -> done),
+        # not just on completion: the UI tells the agent *why* a record is
+        # still waiting (queued for the slow vision reader).
+        last_state: dict[str, str] = {}
         while True:
             records = store.list_records(batch_id)
             for r in records:
-                if r["state"] in ("done", "error") and r["id"] not in seen:
-                    seen.add(r["id"])
+                if last_state.get(r["id"]) != r["state"]:
+                    last_state[r["id"]] = r["state"]
                     yield f"event: record\ndata: {json.dumps(r)}\n\n"
             summary = store.batch_summary(batch_id)
             yield f"event: summary\ndata: {json.dumps(summary)}\n\n"

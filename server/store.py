@@ -159,12 +159,13 @@ class Store:
 
     def list_unfinished(self) -> list[dict]:
         """Records caught mid-flight by a restart: a new process holds no
-        worker for anything still 'pending'/'processing', so without
-        re-enqueueing they would sit there forever."""
+        worker for anything still 'pending'/'processing'/'escalating', so
+        without re-enqueueing they would sit there forever."""
         with self._conn() as c:
             rows = c.execute(
                 "SELECT id, batch_id, filename FROM records "
-                "WHERE state IN ('pending','processing') ORDER BY created_at, id"
+                "WHERE state IN ('pending','processing','escalating') "
+                "ORDER BY created_at, id"
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -172,6 +173,14 @@ class Store:
         with self._conn() as c:
             c.execute(
                 "UPDATE records SET state='processing' WHERE id=?", (record_id,)
+            )
+
+    def record_escalating(self, record_id: str) -> None:
+        """Tier A is done; the record is queued for the (slow) vision
+        reader. A distinct state so the UI can say why it's waiting."""
+        with self._conn() as c:
+            c.execute(
+                "UPDATE records SET state='escalating' WHERE id=?", (record_id,)
             )
 
     def record_done(

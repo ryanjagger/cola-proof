@@ -71,7 +71,7 @@ export interface RecordRow {
   id: string
   batch_id: string
   filename: string
-  state: 'pending' | 'processing' | 'done' | 'error'
+  state: 'pending' | 'processing' | 'escalating' | 'done' | 'error'
   error: string | null
   ttb_id: string | null
   auto_status: 'Pass' | 'Needs Review' | 'Fail' | null

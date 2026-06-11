@@ -8,6 +8,8 @@ export const FIELD_LABELS: Record<string, string> = {
   net_contents: 'Net contents',
   alcohol_content: 'Alcohol content',
   class_type: 'Class / type',
+  bottler: 'Bottler / producer',
+  country_of_origin: 'Country of origin',
 }
 
 export function fieldLabel(field: string): string {
@@ -18,6 +20,8 @@ const formatCheck = (v: Verdict) => v.note?.includes('not on form')
 
 export function verdictSentence(v: Verdict): string {
   const name = fieldLabel(v.field)
+  if (v.field === 'bottler') return bottlerSentence(v)
+  if (v.field === 'country_of_origin') return originSentence(v)
   switch (v.outcome) {
     case 'exact':
       if (v.note?.includes('stated on container'))
@@ -33,6 +37,34 @@ export function verdictSentence(v: Verdict): string {
     case 'missing':
       if (formatCheck(v)) return "Couldn't find this on the label — please verify"
       return "Couldn't find this on the label — please verify"
+  }
+}
+
+function bottlerSentence(v: Verdict): string {
+  switch (v.outcome) {
+    case 'exact':
+      if (v.note?.includes('city/state found'))
+        return "Applicant's name and city/state found on the label"
+      return "Applicant's name found on the label"
+    case 'near_miss':
+      if (v.note?.includes('backup reader'))
+        return "Couldn't read this clearly — compare with the label image"
+      return "Close to the applicant's name — may be a trade name, please check"
+    default:
+      return "Couldn't find the applicant's name — the label may use a trade name. Please check."
+  }
+}
+
+function originSentence(v: Verdict): string {
+  switch (v.outcome) {
+    case 'exact':
+      return 'Origin statement found on the label'
+    case 'near_miss':
+      if (v.note?.includes('backup reader'))
+        return "Couldn't read this clearly — compare with the label image"
+      return 'Found an origin phrase but not the country — please check'
+    default:
+      return 'No country of origin found — it may be worded in another language. Please check the label.'
   }
 }
 

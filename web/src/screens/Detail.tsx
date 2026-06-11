@@ -314,7 +314,7 @@ function VerdictCard({
       <dl className="mt-2 grid grid-cols-2 gap-3 text-sm">
         <div>
           <dt className="text-xs uppercase tracking-wide text-stone-500">On the form</dt>
-          <dd className="mt-0.5 font-mono">
+          <dd className="mt-0.5 whitespace-pre-line font-mono">
             {v.form_value ?? <span className="text-stone-400">not on this form revision</span>}
           </dd>
         </div>

@@ -37,6 +37,8 @@ _FIELD_LABELS = {
     "net_contents": "Net contents",
     "alcohol_content": "Alcohol content",
     "class_type": "Class/type",
+    "bottler": "Bottler/producer",
+    "country_of_origin": "Country of origin",
 }
 
 _OUTCOME_TEXT = {

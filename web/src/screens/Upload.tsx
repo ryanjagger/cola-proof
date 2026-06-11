@@ -42,7 +42,7 @@ export default function Upload() {
       <header className="mb-10">
         <h1 className="text-2xl font-semibold tracking-tight">COLA Proof</h1>
         <p className="mt-1 text-stone-600">
-          Drop a stack of approved COLA application PDFs. Each label gets checked
+          Drop one or more COLA application PDFs. Each label gets checked
           against its form; anything doubtful is flagged for your review.
         </p>
       </header>

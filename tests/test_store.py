@@ -158,3 +158,18 @@ def test_old_verdicts_without_source_round_trip(store):
     r = store.get_record(rid)
     assert "source" not in r["verdicts"][0]
     assert "source" not in r["warning"]
+
+
+def test_list_unfinished_returns_only_inflight_states(store):
+    b = store.create_batch("batch")
+    rid_pending = store.add_record(b["id"], "a.pdf")
+    rid_processing = store.add_record(b["id"], "b.pdf")
+    store.record_processing(rid_processing)
+    rid_done = store.add_record(b["id"], "c.pdf")
+    _finish(store, rid_done, "Pass")
+    rid_error = store.add_record(b["id"], "d.pdf")
+    store.record_error(rid_error, "boom")
+
+    unfinished = store.list_unfinished()
+    assert {r["id"] for r in unfinished} == {rid_pending, rid_processing}
+    assert all(r["batch_id"] == b["id"] for r in unfinished)

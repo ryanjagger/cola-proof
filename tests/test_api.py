@@ -123,3 +123,45 @@ def test_delete_purges_media(client, processed_batch):
     assert resp.status_code == 200
     assert not media.exists()
     assert client.get(f"/api/batches/{processed_batch}").status_code == 404
+
+
+def test_restart_recovers_inflight_records(client):
+    """A record stranded 'processing' by a restart is re-enqueued on
+    startup and finishes; without recovery it would hang forever."""
+    from fastapi.testclient import TestClient
+
+    from server import app as app_module
+
+    pdf = (SAMPLES / "12207001000539.pdf").read_bytes()
+    resp = client.post(
+        "/api/batches",
+        files=[("files", ("12207001000539.pdf", pdf, "application/pdf"))],
+    )
+    batch_id = resp.json()["batch"]["id"]
+    record_id = resp.json()["record_ids"][0]
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        if client.get(f"/api/records/{record_id}").json()["state"] == "done":
+            break
+        time.sleep(0.5)
+
+    # Simulate the restart having caught it mid-flight.
+    with app_module.store._conn() as c:
+        c.execute(
+            "UPDATE records SET state='processing', auto_status=NULL WHERE id=?",
+            (record_id,),
+        )
+
+    # A fresh client context re-runs the startup hook on the same store.
+    with TestClient(app_module.app) as restarted:
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            r = restarted.get(f"/api/records/{record_id}").json()
+            if r["state"] == "done":
+                assert r["auto_status"] == "Pass"
+                break
+            time.sleep(0.5)
+        else:
+            pytest.fail("orphaned record was not recovered on startup")
+
+    client.delete(f"/api/batches/{batch_id}")

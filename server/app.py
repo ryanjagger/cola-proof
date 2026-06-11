@@ -14,6 +14,7 @@ import asyncio
 import dataclasses
 import json
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Response, UploadFile
@@ -27,7 +28,13 @@ from .pipeline.runner import RecordResult, escalate, process_pdf
 from .pipeline.vision import VisionClient
 from .store import Store
 
-app = FastAPI(title="COLA Proof")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    _recover_orphans()
+    yield
+
+
+app = FastAPI(title="COLA Proof", lifespan=_lifespan)
 store = Store(settings.db_path, settings.media_dir)
 _executor = ThreadPoolExecutor(max_workers=settings.ocr_workers)
 # Tier B is a separate, smaller pool: the CPU vision model is slow, so
@@ -112,6 +119,19 @@ def _process_record(record_id: str, batch_id: str, pdf_path: Path) -> None:
         _finish_record(record_id, batch_id, result)
     except Exception as e:  # never lose a record silently
         store.record_error(record_id, f"{type(e).__name__}: {e}")
+
+
+def _recover_orphans() -> None:
+    """Re-enqueue records stranded mid-flight by a restart (redeploy,
+    crash, compose down): the uploaded PDF persists in the batch media
+    dir, so the pipeline simply runs them again. Without this they stay
+    'processing' forever and their batch never completes."""
+    for r in store.list_unfinished():
+        pdf_path = store.batch_media_dir(r["batch_id"]) / f"{r['id']}.pdf"
+        if pdf_path.exists():
+            _executor.submit(_process_record, r["id"], r["batch_id"], pdf_path)
+        else:
+            store.record_error(r["id"], "interrupted by a restart; source PDF gone")
 
 
 # --- batches ----------------------------------------------------------------

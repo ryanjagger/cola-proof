@@ -195,8 +195,12 @@ def evaluate(result: RecordResult) -> None:
 
 
 def escalate(result: RecordResult, client: VisionClient, max_crops: int = 3) -> None:
-    """Tier B: re-read the doubtful crops with the vision model, then
-    re-evaluate the record on the richer text pool.
+    """Tier B: re-read the doubtful crops with the vision model,
+    re-evaluating the record after each read and stopping as soon as it
+    resolves to Pass — further reads can't improve a Pass, and on the
+    CPU model every skipped crop is seconds off the batch tail. (The
+    stop test is auto_status, not empty escalation reasons: low-OCR-conf
+    reasons never clear, since Tier A confidences don't change.)
 
     Crop choice: matchable crops first (front/back carry the fields);
     'other' crops (strips, necks) when the warning still isn't exact or a
@@ -220,9 +224,10 @@ def escalate(result: RecordResult, client: VisionClient, max_crops: int = 3) -> 
     for crop in candidates[:max_crops]:
         vr = client.read_crop(crop.data, crop.ext)
         result.vision[crop.index] = vr
-
-    if any(v.ok for v in result.vision.values()):
-        evaluate(result)
+        if vr.ok:
+            evaluate(result)
+            if result.auto_status == "Pass":
+                break
 
 
 def _attach_boxes(result: RecordResult) -> None:

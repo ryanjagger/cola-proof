@@ -204,6 +204,40 @@ def test_escalation_upgrades_corroborated_record_to_pass():
     assert record.warning.source == "vision"
 
 
+def test_escalation_stops_reading_once_resolved():
+    """Every skipped read is seconds off the batch tail: once a record
+    re-evaluates to Pass, the remaining candidate crops are not sent."""
+    record = _record()
+    # Corroborate the warning on Tier A so the record can actually pass
+    # (an uncorroborated vision warning is held in review by design).
+    mangled = CANONICAL_WARNING.replace("Surgeon", "Surge0n").replace(
+        "machinery", "rnachinery"
+    )
+    record.ocr[1] = OcrResult(
+        text=mangled, words=[("x", 70.0)], mean_conf=70.0, low_conf_fraction=0.4
+    )
+    evaluate(record)
+    fake = FakeVision(VisionResult(
+        ok=True, brand_text="Pisco Viejo Tonel", abv_text="Alc. 42% by Vol",
+        net_contents_text="750 ml", warning_text=CANONICAL_WARNING,
+    ))
+    escalate(record, fake)
+    assert record.auto_status == "Pass"
+    assert len(fake.crops_read) == 1, "second crop read despite resolution"
+
+
+def test_escalation_keeps_reading_while_unresolved():
+    """A read that leaves the record in review must not stop the loop."""
+    record = _record()  # vision-only warning stays demoted -> never Pass
+    fake = FakeVision(VisionResult(
+        ok=True, brand_text="Pisco Viejo Tonel", abv_text="Alc. 42% by Vol",
+        net_contents_text="750 ml", warning_text=CANONICAL_WARNING,
+    ))
+    escalate(record, fake)
+    assert record.auto_status == "Needs Review"
+    assert len(fake.crops_read) == 2, "loop stopped before exhausting crops"
+
+
 def test_uncorroborated_vision_warning_stays_in_review():
     """The statutory warning is memorized boilerplate a vision model can
     fabricate. If Tier A saw nothing warning-like, a vision-only exact

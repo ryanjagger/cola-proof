@@ -398,10 +398,10 @@ function CropViewer({
             <p className="mt-1 font-mono text-xs text-stone-400">
               ocr conf {crop.ocr_conf ?? '—'} · {crop.dpi} dpi ·{' '}
               {crop.vision_ok == null
-                ? 'tier B not run'
+                ? 'Vision not run'
                 : crop.vision_ok
-                  ? `tier B ok ${crop.vision_ms}ms`
-                  : `tier B failed ${crop.vision_ms}ms${crop.vision_error ? ` (${crop.vision_error})` : ''}`}
+                  ? `Vision ok ${crop.vision_ms}ms`
+                  : `Vision failed ${crop.vision_ms}ms${crop.vision_error ? ` (${crop.vision_error})` : ''}`}
             </p>
           )}
         </div>

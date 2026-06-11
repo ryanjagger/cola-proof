@@ -74,7 +74,7 @@ export default function Batch() {
 
   return (
     <div className="mx-auto min-h-screen max-w-4xl px-6 py-8">
-      <header className="mb-6 flex items-baseline justify-between">
+      <header className="mb-6 flex flex-wrap items-baseline justify-between gap-2">
         <div>
           <Link to="/" className="text-sm text-blue-700 hover:underline">
             ← Upload
@@ -106,48 +106,51 @@ export default function Batch() {
         </div>
       )}
 
-      <div className="mb-4 flex items-center gap-2">
-        {FILTERS.map((f) => (
-          <button
-            key={f.key}
-            onClick={() => setFilter(f.key)}
-            className={`rounded-full px-3 py-1 text-sm transition-colors ${
-              filter === f.key
-                ? 'bg-stone-900 text-white'
-                : 'bg-white text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50'
-            }`}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setFilter(f.key)}
+              className={`whitespace-nowrap rounded-full px-3 py-1 text-sm transition-colors ${
+                filter === f.key
+                  ? 'bg-stone-900 text-white'
+                  : 'bg-white text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50'
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <a
+            href={`/api/batches/${batchId}/export.csv?scope=${filter}`}
+            className="whitespace-nowrap rounded-lg bg-white px-3 py-1 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
           >
-            {f.label}
+            Export CSV
+          </a>
+          <a
+            href={`/api/batches/${batchId}/export.pdf?scope=${filter}`}
+            className="whitespace-nowrap rounded-lg bg-white px-3 py-1 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
+          >
+            Export PDF
+          </a>
+          <button
+            onClick={async () => {
+              if (
+                window.confirm(
+                  'Delete this batch and purge the uploaded PDFs and label images? Export first — the export is what you keep.',
+                )
+              ) {
+                await fetch(`/api/batches/${batchId}`, { method: 'DELETE' })
+                window.location.href = '/'
+              }
+            }}
+            className="whitespace-nowrap rounded-lg bg-white px-3 py-1 text-sm text-red-700 ring-1 ring-red-200 hover:bg-red-50"
+          >
+            Delete &amp; purge
           </button>
-        ))}
-        <span className="flex-1" />
-        <a
-          href={`/api/batches/${batchId}/export.csv?scope=${filter}`}
-          className="rounded-lg bg-white px-3 py-1 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
-        >
-          Export CSV
-        </a>
-        <a
-          href={`/api/batches/${batchId}/export.pdf?scope=${filter}`}
-          className="rounded-lg bg-white px-3 py-1 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
-        >
-          Export PDF
-        </a>
-        <button
-          onClick={async () => {
-            if (
-              window.confirm(
-                'Delete this batch and purge the uploaded PDFs and label images? Export first — the export is what you keep.',
-              )
-            ) {
-              await fetch(`/api/batches/${batchId}`, { method: 'DELETE' })
-              window.location.href = '/'
-            }
-          }}
-          className="rounded-lg bg-white px-3 py-1 text-sm text-red-700 ring-1 ring-red-200 hover:bg-red-50"
-        >
-          Delete & purge
-        </button>
+        </div>
       </div>
 
       <ul className="space-y-2">
@@ -166,28 +169,28 @@ export default function Batch() {
 
 function StatusPill({ record }: { record: RecordRow }) {
   if (record.state === 'error')
-    return <span className="rounded-full bg-stone-200 px-2.5 py-0.5 text-xs font-medium text-stone-700">Couldn’t process</span>
+    return <span className="whitespace-nowrap rounded-full bg-stone-200 px-2.5 py-0.5 text-xs font-medium text-stone-700">Couldn’t process</span>
   switch (record.auto_status) {
     case 'Fail':
-      return <span className="rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">Fail</span>
+      return <span className="whitespace-nowrap rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">Fail</span>
     case 'Needs Review':
-      return <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800">Needs review</span>
+      return <span className="whitespace-nowrap rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800">Needs review</span>
     case 'Pass':
-      return <span className="rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">Pass</span>
+      return <span className="whitespace-nowrap rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">Pass</span>
     default:
-      return <span className="rounded-full bg-stone-100 px-2.5 py-0.5 text-xs text-stone-500">Working…</span>
+      return <span className="whitespace-nowrap rounded-full bg-stone-100 px-2.5 py-0.5 text-xs text-stone-500">Working…</span>
   }
 }
 
 function DispositionTag({ record }: { record: RecordRow }) {
   if (record.state !== 'done') return null
   if (record.disposition === null)
-    return <span className="text-xs font-medium text-stone-500">awaiting your call</span>
+    return <span className="whitespace-nowrap text-xs font-medium text-stone-500">awaiting your call</span>
   const label =
     record.dispositioned_by === 'system'
       ? `${record.disposition} automatically`
       : `${record.disposition} by ${record.dispositioned_by}`
-  return <span className="text-xs text-stone-500">{label}</span>
+  return <span className="whitespace-nowrap text-xs text-stone-500">{label}</span>
 }
 
 function RecordRowItem({ record: r }: { record: RecordRow }) {
@@ -209,13 +212,13 @@ function RecordRowItem({ record: r }: { record: RecordRow }) {
       <li>
         <Link
           to={`/records/${r.id}`}
-          className="flex items-center justify-between rounded-xl border border-green-200/70 bg-green-50/50 px-4 py-2.5 hover:bg-green-50"
+          className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-xl border border-green-200/70 bg-green-50/50 px-4 py-2.5 hover:bg-green-50"
         >
-          <span className="flex items-baseline gap-3 text-sm">
+          <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-sm">
             <span className="font-medium text-stone-800">{title}</span>
             <span className="text-stone-500">{r.ttb_id}</span>
           </span>
-          <span className="flex items-center gap-3">
+          <span className="flex shrink-0 items-center gap-3">
             <DispositionTag record={r} />
             <StatusPill record={r} />
           </span>
@@ -230,15 +233,15 @@ function RecordRowItem({ record: r }: { record: RecordRow }) {
         to={r.state === 'error' ? '#' : `/records/${r.id}`}
         className="block rounded-xl border border-stone-200 bg-white px-4 py-3 shadow-sm transition-shadow hover:shadow"
       >
-        <div className="flex items-center justify-between">
-          <span className="flex items-baseline gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+          <span className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
             <span className="font-medium">{title}</span>
             <span className="text-sm text-stone-500">{r.ttb_id}</span>
             {r.form?.class_type_description && (
               <span className="text-sm text-stone-500">{r.form.class_type_description}</span>
             )}
           </span>
-          <span className="flex items-center gap-3">
+          <span className="flex shrink-0 items-center gap-3">
             <DispositionTag record={r} />
             <StatusPill record={r} />
           </span>

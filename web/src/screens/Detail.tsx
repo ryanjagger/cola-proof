@@ -85,7 +85,7 @@ export default function Detail() {
 
   return (
     <div className="mx-auto min-h-screen max-w-6xl px-6 py-8">
-      <header className="mb-6 flex items-center justify-between">
+      <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <Link to={`/batches/${record.batch_id}`} className="text-sm text-blue-700 hover:underline">
             ← Back to batch
@@ -100,10 +100,10 @@ export default function Detail() {
               .join(' · ')}
           </p>
         </div>
-        <div className="flex items-start gap-4">
+        <div className="flex shrink-0 items-start gap-4">
           <a
             href={`/api/records/${record.id}/export.pdf`}
-            className="rounded-lg bg-white px-3 py-1.5 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
+            className="whitespace-nowrap rounded-lg bg-white px-3 py-1.5 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
           >
             Record PDF
           </a>
@@ -194,7 +194,7 @@ function AutoStatusBadge({ record }: { record: RecordRow }) {
         : 'bg-amber-100 text-amber-800'
   return (
     <div className="text-right">
-      <span className={`rounded-full px-3 py-1 text-sm font-medium ${style}`}>
+      <span className={`whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium ${style}`}>
         {status === 'Needs Review' ? 'Needs review' : status}
       </span>
       <p className="mt-1 text-xs text-stone-500">automatic check result</p>

@@ -4,6 +4,7 @@ import {
   cropUrl,
   getRecord,
   listRecords,
+  pdfUrl,
   setDisposition,
   type RecordRow,
   type Verdict,
@@ -232,47 +233,58 @@ function WarningCard({ record }: { record: RecordRow }) {
 
 function CropViewer({ record }: { record: RecordRow }) {
   const crops = record.crops ?? []
-  const [selected, setSelected] = useState(0)
+  const [selected, setSelected] = useState<number | 'pdf'>(crops.length ? crops[0].index : 'pdf')
   const [zoom, setZoom] = useState(false)
-  const crop = crops[selected]
+  const crop = selected === 'pdf' ? null : crops.find((c) => c.index === selected)
 
   useEffect(() => setZoom(false), [selected])
 
-  if (!crop)
-    return (
-      <section className="rounded-xl border border-stone-200 bg-white p-6 text-stone-500">
-        No label images were found in this PDF.
-      </section>
-    )
+  const buttonStyle = (active: boolean) =>
+    `rounded-lg px-3 py-1 text-sm ${
+      active
+        ? 'bg-stone-900 text-white'
+        : 'bg-white text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50'
+    }`
 
   return (
     <section className="flex flex-col">
-      <div className="overflow-auto rounded-xl border border-stone-200 bg-white p-2" style={{ maxHeight: '70vh' }}>
-        <img
-          src={cropUrl(record.id, crop.index)}
-          alt={crop.caption_type}
-          onClick={() => setZoom((z) => !z)}
-          className={`mx-auto cursor-zoom-in ${zoom ? 'w-[250%] max-w-none cursor-zoom-out' : 'max-h-[66vh] object-contain'}`}
+      {crop ? (
+        <div className="overflow-auto rounded-xl border border-stone-200 bg-white p-2" style={{ maxHeight: '70vh' }}>
+          <img
+            src={cropUrl(record.id, crop.index)}
+            alt={crop.caption_type}
+            onClick={() => setZoom((z) => !z)}
+            className={`mx-auto cursor-zoom-in ${zoom ? 'w-[250%] max-w-none cursor-zoom-out' : 'max-h-[66vh] object-contain'}`}
+          />
+        </div>
+      ) : (
+        <iframe
+          src={pdfUrl(record.id)}
+          title="Full application PDF"
+          className="h-[70vh] w-full rounded-xl border border-stone-200 bg-white"
         />
-      </div>
+      )}
       <div className="mt-2 flex items-center justify-between">
         <div className="flex gap-2">
           {crops.map((c) => (
             <button
               key={c.index}
               onClick={() => setSelected(c.index)}
-              className={`rounded-lg px-3 py-1 text-sm capitalize ${
-                c.index === selected
-                  ? 'bg-stone-900 text-white'
-                  : 'bg-white text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50'
-              }`}
+              className={`capitalize ${buttonStyle(c.index === selected)}`}
             >
               {c.kind === 'other' ? c.caption_type.toLowerCase() : c.kind}
             </button>
           ))}
+          <button onClick={() => setSelected('pdf')} className={buttonStyle(selected === 'pdf')}>
+            PDF
+          </button>
         </div>
         <p className="text-xs text-stone-500">
-          {crop.width_in}″ × {crop.height_in}″ · click image to zoom
+          {crop
+            ? `${crop.width_in}″ × ${crop.height_in}″ · click image to zoom`
+            : crops.length
+              ? 'the application as uploaded'
+              : 'no label images were found — showing the uploaded PDF'}
         </p>
       </div>
     </section>

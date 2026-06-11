@@ -252,6 +252,23 @@ def get_record(record_id: str) -> dict:
     return record
 
 
+@app.get("/api/records/{record_id}/pdf")
+def get_record_source_pdf(record_id: str) -> FileResponse:
+    """The original uploaded PDF, inline so the browser renders it."""
+    record = store.get_record(record_id)
+    if not record:
+        raise HTTPException(404, "record not found")
+    path = store.batch_media_dir(record["batch_id"]) / f"{record_id}.pdf"
+    if not path.exists():
+        raise HTTPException(410, "media purged")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=record["filename"],
+        content_disposition_type="inline",
+    )
+
+
 @app.get("/api/records/{record_id}/crops/{index}")
 def get_crop(record_id: str, index: int) -> FileResponse:
     record = store.get_record(record_id)

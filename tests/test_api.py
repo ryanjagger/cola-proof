@@ -71,6 +71,16 @@ def test_crop_served(client, processed_batch):
     assert len(resp.content) > 1000
 
 
+def test_source_pdf_served_inline(client, processed_batch):
+    records = client.get(f"/api/batches/{processed_batch}/records").json()
+    r = records[0]
+    resp = client.get(f"/api/records/{r['id']}/pdf")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    assert resp.headers["content-disposition"].startswith("inline")
+    assert resp.content[:5] == b"%PDF-"
+
+
 def test_disposition_roundtrip(client, processed_batch):
     records = client.get(f"/api/batches/{processed_batch}/records").json()
     rid = records[0]["id"]

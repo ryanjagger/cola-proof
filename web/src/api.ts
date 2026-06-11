@@ -132,3 +132,7 @@ export async function setDisposition(
 export function cropUrl(recordId: string, index: number): string {
   return `/api/records/${recordId}/crops/${index}`
 }
+
+export function pdfUrl(recordId: string): string {
+  return `/api/records/${recordId}/pdf`
+}

@@ -18,6 +18,17 @@ from server.pipeline.warning import STATUTORY_BODY, STATUTORY_PREFIX, WarningSta
 CANONICAL_WARNING = f"{STATUTORY_PREFIX} {STATUTORY_BODY}"
 
 
+def _tiny_jpeg() -> bytes:
+    """A real decodable image: read_crop re-encodes crops before sending."""
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), "white").save(buf, "JPEG")
+    return buf.getvalue()
+
+
 def _client(handler) -> VisionClient:
     return VisionClient(
         "http://vision.test/v1", "test-model",
@@ -48,7 +59,7 @@ def test_read_crop_parses_structured_transcription():
             }
         )
 
-    r = _client(handler).read_crop(b"fakejpeg", "jpeg")
+    r = _client(handler).read_crop(_tiny_jpeg(), "jpeg")
     assert r.ok
     assert r.brand_text == "Viejo Tonel"
     assert "42%" in r.abv_text
@@ -59,7 +70,7 @@ def test_read_crop_degrades_on_http_error():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="boom")
 
-    r = _client(handler).read_crop(b"fakejpeg", "jpeg")
+    r = _client(handler).read_crop(_tiny_jpeg(), "jpeg")
     assert not r.ok
     assert r.error
     assert r.combined_text == ""
@@ -69,7 +80,7 @@ def test_read_crop_degrades_on_garbage_payload():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"unexpected": True})
 
-    r = _client(handler).read_crop(b"fakejpeg", "jpeg")
+    r = _client(handler).read_crop(_tiny_jpeg(), "jpeg")
     assert not r.ok
 
 
@@ -93,7 +104,7 @@ def test_truncated_json_salvages_complete_fields():
             },
         )
 
-    r = _client(handler).read_crop(b"fakejpeg", "jpeg")
+    r = _client(handler).read_crop(_tiny_jpeg(), "jpeg")
     assert r.ok
     assert r.brand_text == "Black Maple Hill"
     assert r.net_contents_text == "750ml"
@@ -113,7 +124,7 @@ def test_truncated_json_with_nothing_salvageable_fails():
             },
         )
 
-    r = _client(handler).read_crop(b"fakejpeg", "jpeg")
+    r = _client(handler).read_crop(_tiny_jpeg(), "jpeg")
     assert not r.ok
 
 
@@ -332,3 +343,43 @@ def test_container_fallback_attributes_form_source():
     # Values actually read off the crop are attributed to OCR.
     assert by_field["alcohol_content"].source == "ocr"
     assert by_field["alcohol_content"].source_crop == 0
+
+
+def test_crops_are_reencoded_clean_before_sending():
+    """The corpus crop that crashed llama-server (Photoshop EXIF + ICC
+    profile) must reach the wire as bare re-encoded pixels."""
+    import base64
+    import io
+
+    import fitz
+    from PIL import Image
+
+    from server.pipeline.extract_labels import extract_labels
+
+    pdf = Path(__file__).parent.parent / "sample-forms" / "11115001000381.pdf"
+    crop = extract_labels(fitz.open(pdf))[0]
+    assert b"Photoshop" in crop.data  # the pathological original
+
+    sent = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent["b64"] = body["messages"][0]["content"][1]["image_url"]["url"]
+        return _completion(
+            {"brand_text": None, "abv_text": None, "net_contents_text": None,
+             "warning_text": None, "full_text": None}
+        )
+
+    result = _client(handler).read_crop(crop.data, crop.ext)
+    assert result.ok
+    wire_bytes = base64.b64decode(sent["b64"].split(",", 1)[1])
+    assert b"Photoshop" not in wire_bytes
+    im = Image.open(io.BytesIO(wire_bytes))
+    assert im.format == "JPEG" and im.mode == "RGB"
+    assert "icc_profile" not in im.info and "exif" not in im.info
+
+
+def test_undecodable_crop_degrades_cleanly():
+    result = _client(lambda r: _completion({})).read_crop(b"not an image", "jpeg")
+    assert not result.ok
+    assert "not decodable" in result.error

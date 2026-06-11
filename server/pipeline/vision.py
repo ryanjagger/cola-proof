@@ -16,11 +16,13 @@ keeps the record in Needs Review — escalate on doubt, never reject on it.
 from __future__ import annotations
 
 import base64
+import io
 import json
 import re
 from dataclasses import dataclass
 
 import httpx
+from PIL import Image
 
 # No concrete example values in this prompt: small models parrot them
 # into the transcription when the label is hard to read. Observed with a
@@ -86,6 +88,21 @@ def _parse_lenient(content: str) -> dict | None:
     return out or None
 
 
+def _normalize_image(data: bytes) -> tuple[bytes, str]:
+    """Re-encode a crop to a bare RGB baseline JPEG before it reaches the
+    vision server. PDFs embed whatever the applicant's tooling produced —
+    one corpus crop (11115..., Photoshop CS4 EXIF + ICC profile) reliably
+    crashed llama-server's bundled stb_image decoder with heap corruption
+    on contact. Pillow decodes the pathological cases fine; what we send
+    on is always our own clean pixels, never the applicant's bytes."""
+    im = Image.open(io.BytesIO(data))
+    if im.mode != "RGB":
+        im = im.convert("RGB")
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=92)
+    return buf.getvalue(), "jpeg"
+
+
 @dataclass
 class VisionResult:
     ok: bool
@@ -137,6 +154,10 @@ class VisionClient:
 
         if not self.base_url:
             return VisionResult(ok=False, error="vision tier not configured")
+        try:
+            image_data, ext = _normalize_image(image_data)
+        except Exception as e:
+            return VisionResult(ok=False, error=f"crop not decodable: {e}")
         mime = "image/png" if ext == "png" else "image/jpeg"
         b64 = base64.b64encode(image_data).decode()
         payload = {

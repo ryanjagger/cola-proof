@@ -34,6 +34,11 @@ PROMPT = (
     "- net_contents_text: the net contents / volume statement as printed\n"
     "- warning_text: the complete government warning paragraph verbatim, "
     "every word exactly as printed on THIS label\n"
+    "- bottler_text: the statement naming the company that bottled, "
+    "produced, distilled, brewed, blended, or imported this product, word "
+    "for word as printed, including its city and state if printed\n"
+    "- origin_text: any statement of the country the product comes from, "
+    "word for word as printed\n"
     "- full_text: all other readable text on the label, briefly — skip "
     "decorative flourishes and repeated text\n"
     "Rules: copy only what is visible in the image. Write words normally — "
@@ -58,16 +63,20 @@ SCHEMA = {
         "abv_text": {"type": ["string", "null"], "maxLength": 120},
         "net_contents_text": {"type": ["string", "null"], "maxLength": 120},
         "warning_text": {"type": ["string", "null"], "maxLength": 1000},
+        "bottler_text": {"type": ["string", "null"], "maxLength": 200},
+        "origin_text": {"type": ["string", "null"], "maxLength": 80},
         "full_text": {"type": ["string", "null"], "maxLength": 600},
     },
     "required": [
-        "brand_text", "abv_text", "net_contents_text", "warning_text", "full_text",
+        "brand_text", "abv_text", "net_contents_text", "warning_text",
+        "bottler_text", "origin_text", "full_text",
     ],
 }
 
 
 _FIELD_KEYS = (
-    "brand_text", "abv_text", "net_contents_text", "warning_text", "full_text",
+    "brand_text", "abv_text", "net_contents_text", "warning_text",
+    "bottler_text", "origin_text", "full_text",
 )
 
 
@@ -112,6 +121,8 @@ class VisionResult:
     abv_text: str | None = None
     net_contents_text: str | None = None
     warning_text: str | None = None
+    bottler_text: str | None = None
+    origin_text: str | None = None
     full_text: str | None = None
     error: str | None = None
     elapsed_ms: int = 0
@@ -121,7 +132,8 @@ class VisionResult:
         """All transcribed text, for the matchers' text pool."""
         parts = [
             self.brand_text, self.abv_text, self.net_contents_text,
-            self.warning_text, self.full_text,
+            self.warning_text, self.bottler_text, self.origin_text,
+            self.full_text,
         ]
         return "\n".join(p for p in parts if p)
 
@@ -164,11 +176,11 @@ class VisionClient:
         b64 = base64.b64encode(image_data).decode()
         payload = {
             "model": self.model,
-            # Ceiling above the grammar's worst case (~1000 tokens when
+            # Ceiling above the grammar's worst case (~1200 tokens when
             # every field maxes out letter-spaced), not a working budget;
             # _parse_lenient salvages the rare overrun.
             "temperature": 0,
-            "max_tokens": 1200,
+            "max_tokens": 1500,
             "messages": [
                 {
                     "role": "user",
@@ -221,6 +233,8 @@ class VisionClient:
             abv_text=data.get("abv_text"),
             net_contents_text=data.get("net_contents_text"),
             warning_text=data.get("warning_text"),
+            bottler_text=data.get("bottler_text"),
+            origin_text=data.get("origin_text"),
             full_text=data.get("full_text"),
             error=error,
             elapsed_ms=int((time.monotonic() - start) * 1000),

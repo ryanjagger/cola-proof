@@ -49,12 +49,19 @@ def test_read_crop_parses_structured_transcription():
         # JSON-schema-constrained output must be requested.
         assert body["response_format"]["type"] == "json_schema"
         assert body["temperature"] == 0
+        schema = body["response_format"]["json_schema"]["schema"]
+        # The bottler/origin checks rely on dedicated transcription
+        # fields: full_text is prompted "briefly" and would skip them.
+        assert {"bottler_text", "origin_text"} <= set(schema["properties"])
+        assert {"bottler_text", "origin_text"} <= set(schema["required"])
         return _completion(
             {
                 "brand_text": "Viejo Tonel",
                 "abv_text": "Alc. 42% by Vol",
                 "net_contents_text": "750 ml",
                 "warning_text": CANONICAL_WARNING,
+                "bottler_text": "BOTTLED BY VIEJO TONEL S.A., ICA",
+                "origin_text": "PRODUCT OF PERU",
                 "full_text": "PISCO ITALIA",
             }
         )
@@ -64,6 +71,9 @@ def test_read_crop_parses_structured_transcription():
     assert r.brand_text == "Viejo Tonel"
     assert "42%" in r.abv_text
     assert CANONICAL_WARNING in r.combined_text
+    # The new fields feed the matchers' pool like every other field.
+    assert "BOTTLED BY VIEJO TONEL S.A., ICA" in r.combined_text
+    assert "PRODUCT OF PERU" in r.combined_text
 
 
 def test_read_crop_degrades_on_http_error():
@@ -91,6 +101,7 @@ def test_truncated_json_salvages_complete_fields():
         '{"brand_text": "Black Maple Hill", '
         '"abv_text": null, '
         '"net_contents_text": "750ml", '
+        '"bottler_text": "BOTTLED BY OLD LINE DISTILLERY", '
         '"warning_text": "GOVERNMENT WARNING: (1) Accord'  # unterminated
     )
 
@@ -108,6 +119,7 @@ def test_truncated_json_salvages_complete_fields():
     assert r.ok
     assert r.brand_text == "Black Maple Hill"
     assert r.net_contents_text == "750ml"
+    assert r.bottler_text == "BOTTLED BY OLD LINE DISTILLERY"
     assert r.warning_text is None  # the incomplete field is dropped
     assert "truncated" in r.error
     assert "750ml" in r.combined_text

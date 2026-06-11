@@ -152,6 +152,7 @@ def _record() -> RecordResult:
         net_contents="750 MILLILITERS", alcohol_content="42",
         class_type_description="OTHER GRAPE BRANDY (PISCO, GRAPPA) FB",
         has_net_contents_field=True, has_alcohol_content_field=True,
+        applicant="VIEJO TONEL S.A.\nCALLE LIMA 123\nICA",
     )
     result = RecordResult(path=Path("x.pdf"), form=form)
     result.crops = [_crop(0, "front"), _crop(1, "back")]
@@ -178,13 +179,15 @@ def test_escalation_upgrades_corroborated_record_to_pass():
     record = _record()
     assert record.auto_status == "Needs Review"
     assert record.escalation_reasons
-    # Tier A partially read the warning on the back label (a typical
-    # dense-small-print read): corroborates Tier B's exact transcription.
+    # Tier A partially read the warning and bottler line on the back
+    # label (a typical dense-small-print read): corroborates Tier B's
+    # exact transcriptions.
     mangled = CANONICAL_WARNING.replace("Surgeon", "Surge0n").replace(
         "machinery", "rnachinery"
     )
     record.ocr[1] = OcrResult(
-        text=mangled, words=[("x", 70.0)], mean_conf=70.0, low_conf_fraction=0.4
+        text=f"{mangled}\nB0TTLED BY VIEJ0 T0NEL SA",
+        words=[("x", 70.0)], mean_conf=70.0, low_conf_fraction=0.4,
     )
     evaluate(record)
     assert record.warning.status == WarningStatus.NEAR
@@ -192,7 +195,7 @@ def test_escalation_upgrades_corroborated_record_to_pass():
     fake = FakeVision(VisionResult(
         ok=True, brand_text="Pisco Viejo Tonel", abv_text="Alc. 42% by Vol",
         net_contents_text="750 ml", warning_text=CANONICAL_WARNING,
-        full_text="PISCO product of Peru",
+        full_text="PISCO product of Peru\nBOTTLED BY VIEJO TONEL S.A., ICA",
     ))
     escalate(record, fake)
     assert record.auto_status == "Pass"
@@ -208,18 +211,21 @@ def test_escalation_stops_reading_once_resolved():
     """Every skipped read is seconds off the batch tail: once a record
     re-evaluates to Pass, the remaining candidate crops are not sent."""
     record = _record()
-    # Corroborate the warning on Tier A so the record can actually pass
-    # (an uncorroborated vision warning is held in review by design).
+    # Corroborate the warning and bottler line on Tier A so the record
+    # can actually pass (uncorroborated vision boilerplate is held in
+    # review by design).
     mangled = CANONICAL_WARNING.replace("Surgeon", "Surge0n").replace(
         "machinery", "rnachinery"
     )
     record.ocr[1] = OcrResult(
-        text=mangled, words=[("x", 70.0)], mean_conf=70.0, low_conf_fraction=0.4
+        text=f"{mangled}\nB0TTLED BY VIEJ0 T0NEL SA",
+        words=[("x", 70.0)], mean_conf=70.0, low_conf_fraction=0.4,
     )
     evaluate(record)
     fake = FakeVision(VisionResult(
         ok=True, brand_text="Pisco Viejo Tonel", abv_text="Alc. 42% by Vol",
         net_contents_text="750 ml", warning_text=CANONICAL_WARNING,
+        full_text="BOTTLED BY VIEJO TONEL S.A., ICA",
     ))
     escalate(record, fake)
     assert record.auto_status == "Pass"
@@ -246,16 +252,22 @@ def test_uncorroborated_vision_warning_stays_in_review():
     fake = FakeVision(VisionResult(
         ok=True, brand_text="Pisco Viejo Tonel", abv_text="Alc. 42% by Vol",
         net_contents_text="750 ml", warning_text=CANONICAL_WARNING,
-        full_text="PISCO product of Peru",
+        full_text="PISCO product of Peru\nBOTTLED BY VIEJO TONEL S.A., ICA",
     ))
     escalate(record, fake)
-    # Fields upgrade on the model's transcription...
-    assert all(v.outcome == Outcome.EXACT for v in record.verdicts)
-    # ...but the warning is demoted to near -> the agent verifies it.
+    # Form-vs-label fields upgrade on the model's transcription...
+    by_field = {v.field: v for v in record.verdicts}
+    for f in ("brand_name", "net_contents", "alcohol_content", "class_type"):
+        assert by_field[f].outcome == Outcome.EXACT, f
+    # ...but the boilerplate-shaped reads (warning, bottler) are demoted:
+    # Tier A saw nothing like them, so vision-only is doubt to review.
     assert record.warning.status == WarningStatus.NEAR
+    assert by_field["bottler"].outcome == Outcome.NEAR_MISS
+    assert "backup reader" in by_field["bottler"].note
     assert record.auto_status == "Needs Review"
     # The demotion must not lose who read it: vision-only is the story.
     assert record.warning.source == "vision"
+    assert by_field["bottler"].source == "vision"
 
 
 def test_vision_only_numeric_mismatch_demoted_to_review():
@@ -316,12 +328,14 @@ def test_escalation_reads_other_crops_when_warning_or_numeric_open():
     # warning + numerics unresolved -> matchable crops AND the 'other' strip
     assert set(record.vision.keys()) == {0, 1, 2}
 
-    # Warning exact and numerics satisfied -> only matchable crops re-read.
+    # Warning exact and presence checks satisfied -> only matchable crops
+    # re-read.
     record2 = _record()
     record2.crops.append(_crop(2, "other"))
     record2.ocr.append(
         OcrResult(
-            text=f"{CANONICAL_WARNING}\n750 ml\nAlc. 42% by Vol",
+            text=f"{CANONICAL_WARNING}\n750 ml\nAlc. 42% by Vol\n"
+            "BOTTLED BY VIEJO TONEL S.A.",
             words=[("x", 95.0)], mean_conf=95.0, low_conf_fraction=0.0,
         )
     )
@@ -330,6 +344,77 @@ def test_escalation_reads_other_crops_when_warning_or_numeric_open():
     fake2 = FakeVision(VisionResult(ok=True, full_text="nothing useful"))
     escalate(record2, fake2, max_crops=5)
     assert set(record2.vision.keys()) == {0, 1}
+
+
+def test_bottler_missing_is_review_with_reason():
+    record = _record()
+    by_field = {v.field: v for v in record.verdicts}
+    assert by_field["bottler"].outcome == Outcome.MISSING
+    assert record.auto_status == "Needs Review"
+    assert "bottler: missing" in record.escalation_reasons
+
+
+def test_origin_check_only_for_imports():
+    record = _record()
+    assert "country_of_origin" not in {v.field for v in record.verdicts}
+    record.form.source = "Imported"
+    evaluate(record)
+    by_field = {v.field: v for v in record.verdicts}
+    assert by_field["country_of_origin"].outcome == Outcome.MISSING
+    assert "country_of_origin: missing" in record.escalation_reasons
+
+
+def test_vision_only_origin_demoted_to_review():
+    """ "PRODUCT OF ..." is memorized boilerplate a vision model can
+    fabricate; with no Tier A trace of an origin it lands in review."""
+    record = _record()
+    record.form.source = "Imported"
+    evaluate(record)
+    fake = FakeVision(VisionResult(ok=True, full_text="PRODUCT OF PERU"))
+    escalate(record, fake)
+    by_field = {v.field: v for v in record.verdicts}
+    assert by_field["country_of_origin"].outcome == Outcome.NEAR_MISS
+    assert "backup reader" in by_field["country_of_origin"].note
+    assert by_field["country_of_origin"].source == "vision"
+
+
+def test_corroborated_vision_origin_stands():
+    record = _record()
+    record.form.source = "Imported"
+    # Tier A read a bare country mention; Tier B's anchored statement
+    # then counts as corroborated evidence.
+    record.ocr[1] = OcrResult(
+        text="PISCO ICA PERU", words=[("x", 80.0)],
+        mean_conf=80.0, low_conf_fraction=0.1,
+    )
+    evaluate(record)
+    fake = FakeVision(VisionResult(ok=True, full_text="PRODUCT OF PERU"))
+    escalate(record, fake)
+    by_field = {v.field: v for v in record.verdicts}
+    assert by_field["country_of_origin"].outcome == Outcome.EXACT
+
+
+def test_escalation_reads_other_crops_when_bottler_open():
+    """Bottler lines live on strip labels: an unresolved bottler alone
+    must widen the candidate crops, like the numeric checks do."""
+    record = _record()
+    # A producer whose name shares nothing with the brand (the usual
+    # case) — the brand text on the back crop must not nudge the bottler
+    # check into the near band.
+    record.form.applicant = "ANDEAN COASTAL SPIRITS S.A.C.\nCALLE LIMA 123\nICA"
+    # Resolve warning + numerics + brand on the back crop, leave bottler.
+    record.ocr[1] = OcrResult(
+        text=f"{CANONICAL_WARNING}\nPisco Viejo Tonel 750 ml Alc. 42% by Vol",
+        words=[("x", 95.0)], mean_conf=95.0, low_conf_fraction=0.0,
+    )
+    record.crops.append(_crop(2, "other"))
+    record.ocr.append(OcrResult(text="", words=[]))
+    evaluate(record)
+    by_field = {v.field: v for v in record.verdicts}
+    assert by_field["bottler"].outcome == Outcome.MISSING
+    fake = FakeVision(VisionResult(ok=True, full_text="nothing useful"))
+    escalate(record, fake, max_crops=5)
+    assert 2 in record.vision, "strip crop not read for the open bottler check"
 
 
 def test_numeric_fields_match_from_other_crops():

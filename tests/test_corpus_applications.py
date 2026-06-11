@@ -49,6 +49,7 @@ def test_required_fields_present(results):
         assert f.serial_number, name
         assert f.product_type in ("WINE", "DISTILLED SPIRITS", "MALT BEVERAGE"), name
         assert f.source in ("Domestic", "Imported"), name
+        assert f.applicant, name
         assert not f.warnings, (name, f.warnings)
 
 
@@ -93,8 +94,10 @@ def test_pinned_fields():
 
 def _perfect_read(record):
     """Text a flawless reader would produce for the record's labels."""
+    bottler_line = record.form.applicant.splitlines()[0]
     return (
         f"{record.form.brand_name}\n12 FL. OZ.\n5.0% ALC/VOL\n"
+        f"BOTTLED BY {bottler_line}\n"
         f"{STATUTORY_PREFIX} {STATUTORY_BODY}"
     )
 

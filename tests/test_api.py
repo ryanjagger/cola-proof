@@ -57,6 +57,7 @@ def test_record_processed_and_auto_approved(client, processed_batch):
     assert r["form"]["brand_name"] == "VIEJO TONEL"
     assert {v["field"] for v in r["verdicts"]} == {
         "brand_name", "net_contents", "alcohol_content", "class_type",
+        "bottler", "country_of_origin",
     }
     assert r["warning"]["status"] == "exact"
 

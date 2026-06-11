@@ -83,16 +83,13 @@ def normalize_text(s: str) -> str:
 # --- brand / fanciful name ------------------------------------------------
 
 
-def match_name(field: str, form_value: str, label_texts: list[str]) -> Verdict:
-    """Match a name (brand or fanciful) against crop texts.
-
-    The label side is free text, so the comparison looks for the best
-    window of the crop text rather than whole-string equality.
-    """
-    needle = normalize_text(form_value)
-    if not needle:
-        return Verdict(field, form_value, None, Outcome.MISSING, note="empty form value")
-    sourced = _sourced(label_texts)
+def _best_window(
+    needle: str, sourced: list[SourcedText]
+) -> tuple[float, str | None, SourcedText | None, bool]:
+    """Best fuzzy window for a normalized needle across crop texts:
+    (score, normalized window, winning source, scattered). The label side
+    is free text, so this looks for the best window rather than
+    whole-string equality."""
     best_score, best_text, best_src, scattered = 0.0, None, None, False
     for st in sourced:
         hay = normalize_text(st.text)
@@ -112,6 +109,16 @@ def match_name(field: str, form_value: str, label_texts: list[str]) -> Verdict:
             best_score = ts
             best_src = st  # best_text may lag a prior window; source follows the score
             scattered = True
+    return best_score, best_text, best_src, scattered
+
+
+def match_name(field: str, form_value: str, label_texts: list[str]) -> Verdict:
+    """Match a name (brand or fanciful) against crop texts."""
+    needle = normalize_text(form_value)
+    if not needle:
+        return Verdict(field, form_value, None, Outcome.MISSING, note="empty form value")
+    sourced = _sourced(label_texts)
+    best_score, best_text, best_src, scattered = _best_window(needle, sourced)
     # "(normalized)" is shown only when normalization did real work: the
     # form string never appears verbatim on the label.
     normalized = not any(form_value in st.text for st in sourced)
@@ -223,6 +230,151 @@ def _conflicting_spelling(
         if best is None or a.score > best[0]:
             best = (a.score, window, st)
     return best
+
+
+# --- bottler / producer (applicant name on the label) ----------------------
+
+# The form's applicant block is multi-line: name line(s), street, city.
+# Registry print views combine "TRADE NAME, LEGAL NAME, INC." on the first
+# line and often append the explicit "X (Used on label)" line — the form
+# stating outright which name the label shows. Street addresses never
+# appear on labels, so only names and the city/state line matter here.
+_USED_ON_LABEL_RE = re.compile(r"\(used on label\)\s*$", re.IGNORECASE)
+_DBA_RE = re.compile(
+    r"\b(?:d[./ ]?b[./ ]?a[.:]?|doing business as|trading as)\s*[:\-]?\s*(.+)",
+    re.IGNORECASE,
+)
+# State code is validated against a real list: street lines end in tokens
+# like "ST" or "CT" that the bare two-capitals pattern would swallow.
+_CITY_STATE_RE = re.compile(
+    r"([A-Za-z][A-Za-z .'\-]*?)\s*[,.]?\s+([A-Z]{2})(?:\s+\d{5}(?:-\d{4})?)?\s*$"
+)
+_US_STATES = frozenset(
+    "AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN "
+    "MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA "
+    "WV WI WY PR VI GU".split()
+)
+# Bare corporate suffixes left over when the comma-combined first line is
+# split — not names on their own.
+_CORP_SUFFIXES = frozenset(
+    {"inc", "llc", "l l c", "ltd", "co", "corp", "company", "lp", "llp", "plc"}
+)
+# Labels routinely print the name without its legal designator ("3 STEVES
+# WINERY" for "3 STEVES WINERY LLC") — same entity, not a near-miss.
+_TRAILING_SUFFIX_RE = re.compile(
+    r"[\s,.]+(?:inc|l\.?l\.?c|ltd|co|corp|company|lp|llp|plc)\.?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_corp_suffixes(name: str) -> str:
+    prev = None
+    while prev != name:
+        prev = name
+        name = _TRAILING_SUFFIX_RE.sub("", name)
+    return name
+# Responsibility statements anchoring the bottler line; note-only, never a
+# gate — a partially OCR'd line must not be punished for a missing anchor.
+_RESPONSIBILITY_RE = re.compile(
+    r"\b(?:bottled|produced|distilled|brewed|imported|blended|made|canned|"
+    r"vinted|cellared|crafted)\s+(?:and\s+\w+\s+)?(?:by|for)\b"
+)
+
+
+def _applicant_name_candidates(applicant: str) -> list[str]:
+    """Name strings worth seeking on a label, most specific first: any
+    "(Used on label)" trade name, any DBA line, then the first line and
+    its comma segments (trade vs legal name)."""
+    lines = [ln.strip() for ln in applicant.splitlines() if ln.strip()]
+    if not lines:
+        return []
+    cands: list[str] = []
+    for ln in lines:
+        m = _USED_ON_LABEL_RE.search(ln)
+        if m:
+            cands.append(ln[: m.start()].strip())
+        m = _DBA_RE.search(ln)
+        if m:
+            cands.append(m.group(1).strip())
+    first = lines[0]
+    cands.append(first)
+    cands.extend(seg.strip() for seg in first.split(",") if seg.strip())
+    cands.extend([_strip_corp_suffixes(c) for c in list(cands)])
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in cands:
+        n = normalize_text(c)
+        if n and len(n) >= 4 and n not in _CORP_SUFFIXES and n not in seen:
+            seen.add(n)
+            out.append(c)
+    return out
+
+
+def _applicant_city_state(applicant: str) -> str | None:
+    """Normalized "city st" from the block's last city-shaped line."""
+    lines = [ln.strip() for ln in applicant.splitlines() if ln.strip()]
+    for ln in reversed(lines):
+        if _USED_ON_LABEL_RE.search(ln):
+            continue
+        m = _CITY_STATE_RE.search(ln)
+        if m and m.group(2) in _US_STATES:
+            return normalize_text(f"{m.group(1)} {m.group(2)}")
+    return None
+
+
+def match_bottler(applicant: str | None, label_texts: list[str]) -> Verdict:
+    """Does the applicant's name appear on any label?
+
+    Labels carry name plus city/state only (never the street), and the
+    name may be a trade name the form doesn't spell out, so this check
+    can only ever be EXACT, NEAR_MISS, or MISSING — never MISMATCH: an
+    absent or weak bottler line is doubt to review, not evidence of a
+    wrong label.
+    """
+    candidates = _applicant_name_candidates(applicant or "")
+    if not candidates:
+        return Verdict(
+            "bottler", applicant, None, Outcome.MISSING,
+            note="no applicant name on the form",
+        )
+    sourced = _sourced(label_texts)
+    best_score, best_text, best_src, scattered = 0.0, None, None, False
+    for cand in candidates:
+        score, text, src, scat = _best_window(normalize_text(cand), sourced)
+        if score > best_score:
+            best_score, best_text, best_src, scattered = score, text, src, scat
+    src = best_src.source if best_src else None
+    src_crop = best_src.crop_index if best_src else None
+    normalized = not any(c in st.text for c in candidates for st in sourced)
+    if best_score >= EXACT_THRESHOLD:
+        notes = []
+        if scattered:
+            notes.append("words found non-adjacent on label")
+        city_state = _applicant_city_state(applicant or "")
+        if city_state:
+            pool = " ".join(normalize_text(st.text) for st in sourced)
+            if city_state in pool:
+                notes.append("name and city/state found")
+            else:
+                notes.append("name found; city/state not readable — small print")
+        if best_src and _RESPONSIBILITY_RE.search(normalize_text(best_src.text)):
+            notes.append("next to a bottled/produced-by statement")
+        return Verdict(
+            "bottler", applicant, best_text, Outcome.EXACT, best_score,
+            normalized, "; ".join(notes) or None, src, src_crop,
+        )
+    if best_score >= NEAR_THRESHOLD:
+        return Verdict(
+            "bottler", applicant, best_text, Outcome.NEAR_MISS, best_score,
+            normalized,
+            note="close to the applicant name — may be a trade name or "
+            "hard-to-read print",
+            source=src, source_crop=src_crop,
+        )
+    return Verdict(
+        "bottler", applicant, None, Outcome.MISSING, best_score,
+        note="applicant name not found — the label may use a trade name",
+    )
 
 
 # --- net contents ---------------------------------------------------------
@@ -481,6 +633,105 @@ def format_check_net_contents(label_texts: list[str]) -> Verdict:
     if found:
         note += f"; only implausible reading ({found[0][1]!r})"
     return Verdict("net_contents", None, None, Outcome.MISSING, note=note)
+
+
+# --- country of origin (imports: presence check) ---------------------------
+
+# Country names safe to match bare anywhere on a label, in normalized
+# (lowercase, punctuation-stripped) form. Deliberately a frozen literal:
+# deterministic and offline. Adjectival origins ("FRENCH BRANDY") are out
+# of scope for v1 — an import whose origin is only adjectival lands in
+# review with a note saying why, never a Fail.
+_COUNTRIES = frozenset({
+    "france", "italy", "spain", "portugal", "germany", "austria",
+    "switzerland", "belgium", "netherlands", "holland", "luxembourg",
+    "scotland", "ireland", "wales", "united kingdom", "great britain",
+    "sweden", "norway", "denmark", "finland", "iceland", "poland",
+    "hungary", "romania", "bulgaria", "greece", "croatia", "slovenia",
+    "slovakia", "czech republic", "czechia", "moldova", "ukraine",
+    "russia", "armenia", "azerbaijan", "kazakhstan", "uzbekistan",
+    "mexico", "canada", "guatemala", "nicaragua", "panama", "costa rica",
+    "honduras", "belize", "el salvador", "jamaica", "haiti", "barbados",
+    "bermuda", "bahamas", "trinidad", "dominican republic", "venezuela",
+    "colombia", "ecuador", "peru", "bolivia", "brazil", "paraguay",
+    "uruguay", "argentina", "australia", "new zealand", "fiji", "japan",
+    "south korea", "taiwan", "thailand", "vietnam", "philippines",
+    "indonesia", "israel", "lebanon", "south africa", "kenya",
+    "ethiopia", "morocco", "tunisia", "egypt",
+})
+# Names that collide with ordinary label words (WILD TURKEY bourbon, NEW
+# ENGLAND IPA, INDIA PALE ALE, GEORGIA the state, CHILE the pepper):
+# these count only directly behind an anchoring origin phrase.
+_AMBIGUOUS_COUNTRIES = frozenset({
+    "turkey", "georgia", "chile", "china", "cuba", "india", "england",
+    "jordan", "malta", "korea",
+})
+
+
+def _country_alternation(names: frozenset[str]) -> str:
+    return "|".join(sorted(map(re.escape, names), key=len, reverse=True))
+
+
+_COUNTRY_RE = re.compile(rf"\b(?:{_country_alternation(_COUNTRIES)})\b")
+_ANY_COUNTRY_RE = re.compile(
+    rf"\b(?:{_country_alternation(_COUNTRIES | _AMBIGUOUS_COUNTRIES)})\b"
+)
+# Applied to normalize_text()'d label text (lowercase, no punctuation).
+_ORIGIN_ANCHOR_RE = re.compile(
+    r"\b(?:product|produce)\s+of\b|\bimported\s+from\b|\bmade\s+in\b"
+)
+
+
+def format_check_origin(label_texts: list[str]) -> Verdict:
+    """Origin statement present on an imported product's labels.
+
+    Presence check in the format_check_* family: the form states only
+    "Imported", so there is no value to compare — just whether any
+    readable text names where the product comes from. EXACT, NEAR_MISS,
+    or MISSING — never MISMATCH.
+    """
+    sourced = _sourced(label_texts)
+    anchor_hit: tuple[str, SourcedText] | None = None
+    for st in sourced:
+        hay = normalize_text(st.text)
+        if not hay:
+            continue
+        for m in _ORIGIN_ANCHOR_RE.finditer(hay):
+            tail = hay[m.end() : m.end() + 40]
+            cm = _ANY_COUNTRY_RE.search(tail)
+            if cm:
+                window = hay[m.start() : m.end() + cm.end()].strip()
+                return Verdict(
+                    "country_of_origin", "Imported", window, Outcome.EXACT,
+                    100.0, normalized=True, note="origin statement found",
+                    source=st.source, source_crop=st.crop_index,
+                )
+            if anchor_hit is None:
+                anchor_hit = (hay[m.start() : m.end() + 20].strip(), st)
+    for st in sourced:
+        hay = normalize_text(st.text)
+        if not hay:
+            continue
+        cm = _COUNTRY_RE.search(hay)
+        if cm:
+            return Verdict(
+                "country_of_origin", "Imported", cm.group(0), Outcome.EXACT,
+                100.0, normalized=True, note="country name found on the label",
+                source=st.source, source_crop=st.crop_index,
+            )
+    if anchor_hit:
+        window, st = anchor_hit
+        return Verdict(
+            "country_of_origin", "Imported", window, Outcome.NEAR_MISS,
+            note="found an origin phrase but couldn't read the country — "
+            "please check the label",
+            source=st.source, source_crop=st.crop_index,
+        )
+    return Verdict(
+        "country_of_origin", "Imported", None, Outcome.MISSING,
+        note="no country of origin found — it may be worded in another "
+        "language or as a style; please check the label",
+    )
 
 
 # --- aggregation ----------------------------------------------------------

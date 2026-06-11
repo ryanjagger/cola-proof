@@ -28,8 +28,10 @@ from .match import (
     aggregate_outcomes,
     format_check_abv,
     format_check_net_contents,
+    format_check_origin,
     locate_box,
     match_abv,
+    match_bottler,
     match_class_type,
     match_name,
     match_net_contents,
@@ -42,6 +44,11 @@ from .warning import WarningResult, WarningStatus, validate_warning_across
 # Tier A trust thresholds that trigger Tier B (phase 6).
 ESCALATE_MEAN_CONF = 65.0
 ESCALATE_LOW_FRACTION = 0.30
+
+# Corroboration rule floor: a vision-only reading of memorized-boilerplate-
+# shaped text (warning, bottler line, origin statement) counts only if Tier A
+# independently saw something at least this similar.
+VISION_CORROBORATION_FLOOR = 55.0
 
 _WARNING_OUTCOME = {
     WarningStatus.EXACT: Outcome.EXACT,
@@ -113,8 +120,8 @@ def evaluate(result: RecordResult) -> None:
         if o.readable
     ]
     # Tier A's reading pool, kept aside before vision text is mixed in:
-    # the numeric corroboration rule below needs to ask what OCR alone saw.
-    tier_a_numeric_texts = matchable_texts + other_texts
+    # the corroboration rules below need to ask what OCR alone saw.
+    tier_a_texts = matchable_texts + other_texts
     for c in result.crops:
         v = result.vision.get(c.index)
         if v and v.ok and v.combined_text:
@@ -152,8 +159,15 @@ def evaluate(result: RecordResult) -> None:
         verdicts.append(
             match_class_type(form.class_type_description, matchable_texts)
         )
+    # Bottler and origin statements routinely live on strip/neck labels,
+    # and a long company name can't false-match the way a short brand
+    # could, so both checks read every crop.
+    verdicts.append(match_bottler(form.applicant, all_texts))
+    if form.source == "Imported":
+        verdicts.append(format_check_origin(all_texts))
     if result.vision:
-        _demote_vision_only_mismatches(verdicts, form, tier_a_numeric_texts)
+        _demote_vision_only_mismatches(verdicts, form, tier_a_texts)
+        _demote_uncorroborated_presence(verdicts, form, tier_a_texts)
     result.verdicts = verdicts
 
     result.warning = validate_warning_across(all_texts)
@@ -166,7 +180,7 @@ def evaluate(result: RecordResult) -> None:
         tier_a_only = validate_warning_across(
             [o.text for o in result.ocr if o.readable]
         )
-        if tier_a_only.score < 55:
+        if tier_a_only.score < VISION_CORROBORATION_FLOOR:
             result.warning = WarningResult(
                 WarningStatus.NEAR,
                 result.warning.found_text,
@@ -204,19 +218,19 @@ def escalate(result: RecordResult, client: VisionClient, max_crops: int = 3) -> 
 
     Crop choice: matchable crops first (front/back carry the fields);
     'other' crops (strips, necks) when the warning still isn't exact or a
-    numeric field is unresolved — warnings and volume/ABV statements are
-    often printed there. Per-crop failures and timeouts are swallowed —
+    presence-checked field (volume, ABV, bottler, origin) is unresolved —
+    those statements are often printed there. Per-crop failures and timeouts are swallowed —
     the record just keeps its Tier A verdicts and stays in review:
     couldn't-read-clearly is never a rejection.
     """
     warning_open = result.warning and result.warning.status != WarningStatus.EXACT
-    numeric_missing = any(
-        v.field in ("net_contents", "alcohol_content")
+    presence_missing = any(
+        v.field in ("net_contents", "alcohol_content", "bottler", "country_of_origin")
         and v.outcome == Outcome.MISSING
         for v in result.verdicts
     )
     candidates = [c for c in result.crops if c.matchable]
-    if warning_open or numeric_missing:
+    if warning_open or presence_missing:
         others = [c for c in result.crops if not c.matchable]
         others.sort(key=lambda c: c.px_width * c.px_height, reverse=True)
         candidates.extend(others)
@@ -271,6 +285,31 @@ def _demote_vision_only_mismatches(
         if v.form_value is None:  # format checks never mismatch, but be safe
             continue
         if rematchers[v.field](tier_a_texts).outcome == Outcome.MISSING:
+            v.outcome = Outcome.NEAR_MISS
+            v.note = "only the backup reader saw this value"
+
+
+def _demote_uncorroborated_presence(
+    verdicts: list[Verdict], form: ParsedForm, tier_a_texts: list[SourcedText]
+) -> None:
+    """Presence mirror of the warning corroboration rule: a bottler line
+    or "PRODUCT OF ..." statement is exactly the memorized-boilerplate
+    shape a small VLM can fabricate, so a vision-only EXACT on those is
+    doubt, not evidence. Demote to near-miss -> Needs Review unless
+    Tier A independently saw something similar enough."""
+    for v in verdicts:
+        if v.outcome != Outcome.EXACT or v.source != "vision":
+            continue
+        if v.field == "bottler":
+            tier_a = match_bottler(form.applicant, tier_a_texts)
+            corroborated = (tier_a.score or 0.0) >= VISION_CORROBORATION_FLOOR
+        elif v.field == "country_of_origin":
+            corroborated = (
+                format_check_origin(tier_a_texts).outcome != Outcome.MISSING
+            )
+        else:
+            continue
+        if not corroborated:
             v.outcome = Outcome.NEAR_MISS
             v.note = "only the backup reader saw this value"
 
@@ -345,6 +384,7 @@ def _print_record(result: RecordResult) -> None:
             ("fanciful_name", f.fanciful_name),
             ("product_type", f.product_type),
             ("source", f.source),
+            ("applicant", f.applicant.replace("\n", " | ") if f.applicant else None),
             ("serial_number", f.serial_number),
             ("class_type", f.class_type_description),
             ("net_contents", f.net_contents if f.has_net_contents_field else "(no field on this revision)"),

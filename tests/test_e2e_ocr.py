@@ -28,8 +28,12 @@ def test_easy_records_pass_tier_a(pisco):
 
 
 def test_verdicts_cover_all_checked_fields(pisco):
+    # 12207 is Imported, so the origin presence check runs too.
     fields = {v.field for v in pisco.verdicts}
-    assert fields == {"brand_name", "net_contents", "alcohol_content", "class_type"}
+    assert fields == {
+        "brand_name", "net_contents", "alcohol_content", "class_type",
+        "bottler", "country_of_origin",
+    }
     assert all(v.outcome == Outcome.EXACT for v in pisco.verdicts)
 
 

@@ -9,11 +9,15 @@ import pytest
 from server.pipeline.match import (
     Outcome,
     SourcedText,
+    _applicant_city_state,
+    _applicant_name_candidates,
     aggregate_outcomes,
     format_check_abv,
     format_check_net_contents,
+    format_check_origin,
     locate_box,
     match_abv,
+    match_bottler,
     match_class_type,
     match_name,
     match_net_contents,
@@ -254,6 +258,148 @@ def test_format_check_abv_implausible_reading_is_review_not_fail():
 def test_format_check_abv_prefers_plausible_reading():
     v = format_check_abv(["00% garbage then ALC. 13.5% BY VOL"])
     assert v.outcome == Outcome.EXACT
+
+
+# --- bottler / producer --------------------------------------------------------
+
+# Applicant blocks shaped like the corpus: applications use "NAME\nSTREET\n
+# CITY, ST ZIP"; registry print views combine "TRADE NAME, LEGAL NAME" and
+# often append the "X (Used on label)" line.
+APPLICANT_APP = "GRANITE HARBOR BREWING CO., LLC\n92 WHARF STREET\nROCKLAND, ME 04841"
+APPLICANT_REGISTRY = (
+    "STRONG SPIRITS, INC\n999 WITHROW CT\nBARDSTOWN KY 40004\n"
+    "COTTON HOLLOW DISTILLING (Used on label)"
+)
+APPLICANT_COMBINED = (
+    "HOWLING MOON, THE COPPER STILL LLC\n42 OLD ELK MOUNTAIN RD\n"
+    "ASHEVILLE NC 28804\nHOWLING MOON (Used on label)"
+)
+
+
+def test_applicant_name_candidates_used_on_label_and_segments():
+    cands = [c.upper() for c in _applicant_name_candidates(APPLICANT_COMBINED)]
+    assert "HOWLING MOON" in cands
+    assert "THE COPPER STILL LLC" in cands
+    # Bare corporate suffixes from comma-splitting are not candidates.
+    assert "LLC" not in cands
+    assert "INC" not in [c.upper() for c in _applicant_name_candidates(APPLICANT_REGISTRY)]
+
+
+def test_applicant_city_state_ignores_street_lines():
+    # "999 WITHROW CT" ends in a state-code-shaped token; the real city
+    # line must win, and "(Used on label)" lines are skipped.
+    assert _applicant_city_state(APPLICANT_REGISTRY) == "bardstown ky"
+    assert _applicant_city_state(APPLICANT_APP) == "rockland me"
+
+
+BOTTLER_CASES = [
+    # (applicant block, label texts, expected outcome)
+    (APPLICANT_APP,
+     ["BREWED AND CANNED BY GRANITE HARBOR BREWING CO., ROCKLAND, ME"],
+     Outcome.EXACT),
+    # The "(Used on label)" trade name is what the label shows, not the
+    # permit name.
+    (APPLICANT_REGISTRY,
+     ["DISTILLED AND BOTTLED BY COTTON HOLLOW DISTILLING, BARDSTOWN KY"],
+     Outcome.EXACT),
+    # Comma-combined registry first line: the trade-name segment matches.
+    (APPLICANT_COMBINED, ["DISTILLED BY HOWLING MOON, ASHEVILLE NC"], Outcome.EXACT),
+    # OCR slip lands in the near band, not a fail.
+    ("PINDAR VINEYARDS, LLC\nMAIN ROAD ROUTE 25\nPECONIC NY 11958",
+     ["PINDAR VINYARDS PECONIC NY"], Outcome.NEAR_MISS),
+    # A label with no bottler line reads as not-found -> review.
+    (APPLICANT_APP, ["SEA STACK PORTER 12 FL OZ"], Outcome.MISSING),
+    (APPLICANT_APP, [""], Outcome.MISSING),
+]
+
+
+@pytest.mark.parametrize("applicant,label_texts,expected", BOTTLER_CASES)
+def test_match_bottler(applicant, label_texts, expected):
+    v = match_bottler(applicant, label_texts)
+    assert v.outcome == expected, (v.score, v.label_value, v.note)
+    # The invariant the status model rests on: bottler never mismatches,
+    # so it can hold Needs Review but never push a Fail.
+    assert v.outcome != Outcome.MISMATCH
+
+
+def test_match_bottler_empty_applicant_is_review():
+    v = match_bottler(None, ["BREWED BY SOMEONE, SOMEWHERE OH"])
+    assert v.outcome == Outcome.MISSING
+    assert "no applicant name" in v.note
+
+
+def test_match_bottler_notes_city_state():
+    v = match_bottler(
+        APPLICANT_APP,
+        ["BREWED AND CANNED BY GRANITE HARBOR BREWING CO., ROCKLAND, ME"],
+    )
+    assert v.outcome == Outcome.EXACT
+    assert "city/state" in v.note
+    v = match_bottler(APPLICANT_APP, ["GRANITE HARBOR BREWING CO."])
+    assert v.outcome == Outcome.EXACT
+    assert "not readable" in v.note
+
+
+def test_match_bottler_attributes_source():
+    v = match_bottler(APPLICANT_APP, [
+        SourcedText("SEA STACK PORTER", "ocr", 0),
+        SourcedText("BREWED BY GRANITE HARBOR BREWING CO.", "vision", 1),
+    ])
+    assert v.outcome == Outcome.EXACT
+    assert v.source == "vision"
+    assert v.source_crop == 1
+
+
+# --- country of origin ----------------------------------------------------------
+
+ORIGIN_CASES = [
+    (["PRODUCT OF FRANCE"], Outcome.EXACT),
+    (["Produce of Italy 75 cl"], Outcome.EXACT),
+    (["IMPORTED FROM MEXICO BY GV BERKELEY LLC"], Outcome.EXACT),
+    (["MADE IN SCOTLAND"], Outcome.EXACT),
+    # Bare unambiguous country names count anywhere.
+    (["NEW ZEALAND SAUVIGNON BLANC"], Outcome.EXACT),
+    (["PISCO ICA-PERÚ"], Outcome.EXACT),  # accent folds to "peru"
+    # Ambiguous names count only behind an anchoring phrase.
+    (["PRODUCT OF TURKEY"], Outcome.EXACT),
+    (["WILD TURKEY KENTUCKY STRAIGHT BOURBON"], Outcome.MISSING),
+    (["EXTRA SPECIAL INDIA PALE ALE"], Outcome.MISSING),
+    # Anchor present, country unreadable: a hint to check, not a pass.
+    (["PRODUCT OF FRNCE 750 ML"], Outcome.NEAR_MISS),
+    (["just a brand name"], Outcome.MISSING),
+    ([""], Outcome.MISSING),
+]
+
+
+@pytest.mark.parametrize("label_texts,expected", ORIGIN_CASES)
+def test_format_check_origin(label_texts, expected):
+    v = format_check_origin(label_texts)
+    assert v.outcome == expected, (v.label_value, v.note)
+    assert v.outcome != Outcome.MISMATCH  # presence check never fails a record
+    assert v.form_value == "Imported"
+
+
+def test_format_check_origin_missing_note_explains():
+    v = format_check_origin(["VODKA 750 ML 40% ALC/VOL"])
+    assert v.outcome == Outcome.MISSING
+    assert "another language" in v.note
+
+
+def test_format_check_origin_attributes_source():
+    v = format_check_origin([
+        SourcedText("nothing here", "ocr", 0),
+        SourcedText("PRODUCT OF AZERBAIJAN", "vision", 2),
+    ])
+    assert v.outcome == Outcome.EXACT
+    assert v.source == "vision"
+    assert v.source_crop == 2
+
+
+def test_new_checks_hold_review_never_fail():
+    bottler = match_bottler(APPLICANT_APP, ["unrelated text"])
+    origin = format_check_origin(["unrelated text"])
+    outcomes = [Outcome.EXACT, Outcome.EXACT, bottler.outcome, origin.outcome]
+    assert aggregate_outcomes(outcomes) == "Needs Review"
 
 
 # --- aggregation --------------------------------------------------------------

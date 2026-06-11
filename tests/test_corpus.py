@@ -35,6 +35,7 @@ def test_required_fields_present(results):
         assert f.product_type in ("WINE", "DISTILLED SPIRITS", "MALT BEVERAGE"), name
         assert f.status, name
         assert f.class_type_description, name
+        assert f.applicant, name
         assert not f.warnings, (name, f.warnings)
 
 

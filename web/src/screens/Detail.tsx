@@ -199,6 +199,44 @@ export default function Detail() {
 
 function AutoStatusBadge({ record }: { record: RecordRow }) {
   const status = record.auto_status
+  // Decided records lead with the decision; the checks' verdict is
+  // repeated only when it disagrees — that's the audit signal.
+  if (record.disposition) {
+    const disagreement =
+      record.disposition === 'Approved' && status === 'Fail'
+        ? 'checks recommended fail'
+        : record.disposition === 'Approved' && status === 'Needs Review'
+          ? 'checks flagged this'
+          : record.disposition === 'Rejected' && status === 'Pass'
+            ? 'checks passed this'
+            : null
+    const by =
+      record.dispositioned_by === 'system'
+        ? 'automatically'
+        : `by ${record.dispositioned_by}`
+    return (
+      <div className="text-right">
+        <span
+          className={`whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium ${
+            record.disposition === 'Approved'
+              ? 'bg-green-100 text-green-800'
+              : 'bg-red-100 text-red-800'
+          }`}
+        >
+          {record.disposition}
+        </span>
+        <p className="mt-1 text-xs text-stone-500">
+          {disagreement ? (
+            <>
+              <span className="font-medium text-amber-700">{disagreement}</span> · {by}
+            </>
+          ) : (
+            by
+          )}
+        </p>
+      </div>
+    )
+  }
   const style =
     status === 'Pass'
       ? 'bg-green-100 text-green-800'
@@ -210,7 +248,7 @@ function AutoStatusBadge({ record }: { record: RecordRow }) {
       <span className={`whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium ${style}`}>
         {status === 'Needs Review' ? 'Needs review' : status}
       </span>
-      <p className="mt-1 text-xs text-stone-500">automatic check result</p>
+      <p className="mt-1 text-xs text-stone-500">automatic check result · awaiting your call</p>
     </div>
   )
 }

@@ -5,13 +5,31 @@ import { recordReasons } from '../plain'
 
 type Filter = 'all' | 'open' | 'failed' | 'review' | 'passed'
 
+// Two axes, two filter families: "To review" is workflow state (no
+// decision yet); Flagged/Failed/Passed are what the checks concluded,
+// regardless of any decision since.
 const FILTERS: { key: Filter; label: string }[] = [
   { key: 'all', label: 'All' },
-  { key: 'open', label: 'Open' },
+  { key: 'open', label: 'To review' },
+  { key: 'review', label: 'Flagged' },
   { key: 'failed', label: 'Failed' },
-  { key: 'review', label: 'Needs review' },
   { key: 'passed', label: 'Passed' },
 ]
+
+function matchesFilter(r: RecordRow, filter: Filter): boolean {
+  switch (filter) {
+    case 'open':
+      return r.state === 'done' && r.disposition === null
+    case 'failed':
+      return r.auto_status === 'Fail' || r.state === 'error'
+    case 'review':
+      return r.auto_status === 'Needs Review'
+    case 'passed':
+      return r.auto_status === 'Pass'
+    default:
+      return true
+  }
+}
 
 const STATUS_RANK: Record<string, number> = {
   Fail: 0,
@@ -23,6 +41,10 @@ const STATUS_RANK: Record<string, number> = {
 function rank(r: RecordRow): number {
   if (r.state === 'error') return STATUS_RANK.error
   return STATUS_RANK[r.auto_status ?? ''] ?? 4
+}
+
+function openness(r: RecordRow): number {
+  return r.state === 'done' && r.disposition === null ? 0 : 1
 }
 
 export default function Batch() {
@@ -53,22 +75,22 @@ export default function Batch() {
 
   const rows = useMemo(() => {
     const all = Array.from(records.values())
-    const filtered = all.filter((r) => {
-      switch (filter) {
-        case 'open':
-          return r.state === 'done' && r.disposition === null
-        case 'failed':
-          return r.auto_status === 'Fail' || r.state === 'error'
-        case 'review':
-          return r.auto_status === 'Needs Review'
-        case 'passed':
-          return r.auto_status === 'Pass'
-        default:
-          return true
-      }
-    })
-    return filtered.sort((a, b) => rank(a) - rank(b) || a.filename.localeCompare(b.filename))
+    return all
+      .filter((r) => matchesFilter(r, filter))
+      .sort(
+        (a, b) =>
+          openness(a) - openness(b) ||
+          rank(a) - rank(b) ||
+          a.filename.localeCompare(b.filename),
+      )
   }, [records, filter])
+
+  const counts = useMemo(() => {
+    const all = Array.from(records.values())
+    return Object.fromEntries(
+      FILTERS.map((f) => [f.key, all.filter((r) => matchesFilter(r, f.key)).length]),
+    ) as Record<Filter, number>
+  }, [records])
 
   const processing = summary ? summary.total - summary.processed : 0
 
@@ -89,10 +111,10 @@ export default function Batch() {
               <>{' · '}<span className="font-medium text-red-700">{summary.failed} failed</span></>
             )}
             {summary.needs_review > 0 && (
-              <>{' · '}<span className="font-medium text-amber-700">{summary.needs_review} need review</span></>
+              <>{' · '}<span className="font-medium text-amber-700">{summary.needs_review} flagged</span></>
             )}
             {summary.errors > 0 && <>{' · '}{summary.errors} couldn’t process</>}
-            {' · '}<b>{summary.open}</b> open
+            {' · '}<b>{summary.open}</b> to review
           </p>
         )}
       </header>
@@ -119,6 +141,7 @@ export default function Batch() {
               }`}
             >
               {f.label}
+              {f.key !== 'all' && <span className="opacity-60"> {counts[f.key]}</span>}
             </button>
           ))}
         </div>
@@ -167,30 +190,67 @@ export default function Batch() {
   )
 }
 
-function StatusPill({ record }: { record: RecordRow }) {
-  if (record.state === 'error')
-    return <span className="whitespace-nowrap rounded-full bg-stone-200 px-2.5 py-0.5 text-xs font-medium text-stone-700">Couldn’t process</span>
-  switch (record.auto_status) {
+const CHIP = 'whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium'
+
+function VerdictPill({ status }: { status: string | null }) {
+  switch (status) {
     case 'Fail':
-      return <span className="whitespace-nowrap rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-800">Fail</span>
+      return <span className={`${CHIP} bg-red-100 text-red-800`}>Fail</span>
     case 'Needs Review':
-      return <span className="whitespace-nowrap rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800">Needs review</span>
+      return <span className={`${CHIP} bg-amber-100 text-amber-800`}>Needs review</span>
     case 'Pass':
-      return <span className="whitespace-nowrap rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800">Pass</span>
+      return <span className={`${CHIP} bg-green-100 text-green-800`}>Pass</span>
     default:
-      return <span className="whitespace-nowrap rounded-full bg-stone-100 px-2.5 py-0.5 text-xs text-stone-500">Working…</span>
+      return <span className={`${CHIP} bg-stone-100 font-normal text-stone-500`}>Working…</span>
   }
 }
 
-function DispositionTag({ record }: { record: RecordRow }) {
-  if (record.state !== 'done') return null
-  if (record.disposition === null)
-    return <span className="whitespace-nowrap text-xs font-medium text-stone-500">awaiting your call</span>
-  const label =
-    record.dispositioned_by === 'system'
-      ? `${record.disposition} automatically`
-      : `${record.disposition} by ${record.dispositioned_by}`
-  return <span className="whitespace-nowrap text-xs text-stone-500">{label}</span>
+// The decision and the checks disagree — that's the audit-worthy case,
+// the only time the checks' verdict is repeated on a decided row.
+function checksDisagreement(r: RecordRow): string | null {
+  if (r.disposition === 'Approved' && r.auto_status === 'Fail')
+    return 'checks recommended fail'
+  if (r.disposition === 'Approved' && r.auto_status === 'Needs Review')
+    return 'checks flagged this'
+  if (r.disposition === 'Rejected' && r.auto_status === 'Pass')
+    return 'checks passed this'
+  return null
+}
+
+function RowStatus({ record: r }: { record: RecordRow }) {
+  if (r.state === 'error')
+    return <span className={`${CHIP} bg-stone-200 text-stone-700`}>Couldn’t process</span>
+  if (r.state !== 'done') return <VerdictPill status={null} />
+  if (r.disposition === null) {
+    // Open: amber/red here always means "work to do".
+    return (
+      <>
+        <span className="whitespace-nowrap text-xs font-medium text-stone-500">
+          awaiting your call
+        </span>
+        <VerdictPill status={r.auto_status} />
+      </>
+    )
+  }
+  const disagreement = checksDisagreement(r)
+  const by = r.dispositioned_by === 'system' ? 'automatically' : `by ${r.dispositioned_by}`
+  return (
+    <>
+      {disagreement && (
+        <span className="whitespace-nowrap text-xs font-medium text-amber-700">
+          {disagreement}
+        </span>
+      )}
+      <span className="whitespace-nowrap text-xs text-stone-500">{by}</span>
+      <span
+        className={`${CHIP} ${
+          r.disposition === 'Approved' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+        }`}
+      >
+        {r.disposition}
+      </span>
+    </>
+  )
 }
 
 function RecordRowItem({ record: r }: { record: RecordRow }) {
@@ -202,7 +262,7 @@ function RecordRowItem({ record: r }: { record: RecordRow }) {
     return (
       <li className="flex items-center justify-between rounded-xl border border-stone-200 bg-white/60 px-4 py-2.5 text-stone-400">
         <span className="text-sm">{r.filename}</span>
-        <StatusPill record={r} />
+        <RowStatus record={r} />
       </li>
     )
   }
@@ -219,8 +279,7 @@ function RecordRowItem({ record: r }: { record: RecordRow }) {
             <span className="text-stone-500">{r.ttb_id}</span>
           </span>
           <span className="flex shrink-0 items-center gap-3">
-            <DispositionTag record={r} />
-            <StatusPill record={r} />
+            <RowStatus record={r} />
           </span>
         </Link>
       </li>
@@ -242,8 +301,7 @@ function RecordRowItem({ record: r }: { record: RecordRow }) {
             )}
           </span>
           <span className="flex shrink-0 items-center gap-3">
-            <DispositionTag record={r} />
-            <StatusPill record={r} />
+            <RowStatus record={r} />
           </span>
         </div>
         {reasons.length > 0 && (

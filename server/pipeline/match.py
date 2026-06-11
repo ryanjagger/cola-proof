@@ -66,6 +66,9 @@ class Verdict:
     note: str | None = None
     source: str | None = None  # which reader produced label_value
     source_crop: int | None = None
+    # Where label_value sits on the crop, as (x0, y0, x1, y1) fractions;
+    # OCR-sourced only — the vision reader returns no geometry.
+    box: tuple[float, float, float, float] | None = None
 
 
 def normalize_text(s: str) -> str:
@@ -136,6 +139,48 @@ def match_name(field: str, form_value: str, label_texts: list[str]) -> Verdict:
     # and "unreadable label" are indistinguishable, so a name never
     # hard-fails on OCR — it reads as not-found and goes to review.
     return Verdict(field, form_value, None, Outcome.MISSING, best_score)
+
+
+def locate_box(
+    window: str,
+    words: list[tuple[str, float]],
+    boxes: list[tuple[float, float, float, float]],
+) -> tuple[float, float, float, float] | None:
+    """Union bounding box of the contiguous OCR word run that best matches
+    a verdict's label_value window. The matchers work on joined page text,
+    so the window has no geometry of its own; this re-finds it among the
+    per-word boxes. Fuzzy (the window may differ from the words at the
+    edges of a near-miss), and returns None below a safe floor — no box
+    is better than a wrong box."""
+    target = normalize_text(window)
+    if not target or not words or len(words) != len(boxes):
+        return None
+    n_tokens = len(target.split())
+    norm = [normalize_text(w) for w, _ in words]
+    best: tuple[float, int, int] | None = None
+    for i in range(len(norm)):
+        if not norm[i]:
+            continue
+        parts: list[str] = []
+        for j in range(i, min(i + n_tokens + 3, len(norm))):
+            if norm[j]:
+                parts.append(norm[j])
+            run = " ".join(parts)
+            score = fuzz.ratio(run, target)
+            if best is None or score > best[0]:
+                best = (score, i, j)
+            if len(run) > len(target) + 12:
+                break
+    if best is None or best[0] < 80:
+        return None
+    _, i, j = best
+    span = boxes[i : j + 1]
+    return (
+        min(b[0] for b in span),
+        min(b[1] for b in span),
+        max(b[2] for b in span),
+        max(b[3] for b in span),
+    )
 
 
 def _conflicting_spelling(

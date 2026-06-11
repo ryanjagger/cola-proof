@@ -138,6 +138,10 @@ def test_brand_spelling_conflict_goes_to_review():
     assert "harbour" in (brand.label_value or ""), brand.label_value
     assert record.auto_status == "Needs Review"
     assert any("brand_name" in r for r in record.escalation_reasons)
+    # The highlight box must point at the divergent display spelling in
+    # the top half of the front label, not the boilerplate small print.
+    assert brand.source_crop == 0
+    assert brand.box is not None and brand.box[3] < 0.5, brand.box
 
 
 def test_photo_passes_once_vision_confirms(photo_record):

@@ -54,3 +54,21 @@ def test_tier_a_sources_attributed(pisco):
         assert v.source_crop in crop_indexes, v.field
     assert pisco.warning.source == "ocr"
     assert pisco.warning.source_crop in crop_indexes
+
+
+def test_ocr_verdicts_carry_boxes(pisco):
+    """Every OCR-sourced value resolves back to a sane region on its crop
+    so the UI can highlight where it was read."""
+
+    def sane(box):
+        x0, y0, x1, y1 = box
+        return 0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1
+
+    for v in pisco.verdicts:
+        assert v.box is not None and sane(v.box), (v.field, v.box)
+    w = pisco.warning
+    assert w.box is not None and sane(w.box), w.box
+    # The statutory warning is a multi-line block, not a single word.
+    assert (w.box[3] - w.box[1]) > 0.02
+    for o in pisco.ocr:
+        assert len(o.word_boxes) == len(o.words)

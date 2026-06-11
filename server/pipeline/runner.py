@@ -28,6 +28,7 @@ from .match import (
     aggregate_outcomes,
     format_check_abv,
     format_check_net_contents,
+    locate_box,
     match_abv,
     match_class_type,
     match_name,
@@ -189,6 +190,7 @@ def evaluate(result: RecordResult) -> None:
     )
     if photo_unread and result.auto_status == "Pass":
         result.auto_status = "Needs Review"
+    _attach_boxes(result)
     result.escalation_reasons = _escalation_reasons(result)
 
 
@@ -221,6 +223,28 @@ def escalate(result: RecordResult, client: VisionClient, max_crops: int = 3) -> 
 
     if any(v.ok for v in result.vision.values()):
         evaluate(result)
+
+
+def _attach_boxes(result: RecordResult) -> None:
+    """Resolve each OCR-sourced value back to its word boxes on the crop,
+    so the UI can highlight where it was read. Vision-sourced values stay
+    box-less: the vision reader returns text without geometry."""
+
+    def crop_ocr(crop_index: int | None) -> OcrResult | None:
+        for c, o in zip(result.crops, result.ocr):
+            if c.index == crop_index:
+                return o
+        return None
+
+    for v in result.verdicts:
+        o = crop_ocr(v.source_crop)
+        if v.source == "ocr" and o and v.label_value:
+            v.box = locate_box(v.label_value, o.words, o.word_boxes)
+    w = result.warning
+    if w:
+        o = crop_ocr(w.source_crop)
+        if w.source == "ocr" and o and w.found_text:
+            w.box = locate_box(w.found_text, o.words, o.word_boxes)
 
 
 def _demote_vision_only_mismatches(

@@ -12,6 +12,7 @@ from server.pipeline.match import (
     aggregate_outcomes,
     format_check_abv,
     format_check_net_contents,
+    locate_box,
     match_abv,
     match_class_type,
     match_name,
@@ -78,6 +79,31 @@ def test_match_name_consistent_spelling_stays_exact():
 def test_match_name_searches_all_crops():
     v = match_name("brand_name", "OLD CARTER", ["nothing here", "Old Carter Whiskey"])
     assert v.outcome == Outcome.EXACT
+
+
+# --- locate_box ------------------------------------------------------------
+
+WORDS = ["BREWED", "AND", "CANNED", "BY", "GRANITE", "HARBOR", "BREWING", "CO."]
+BOXES = [(0.1 * i, 0.5, 0.1 * i + 0.08, 0.55) for i in range(len(WORDS))]
+LOCATE_WORDS = [(w, 90.0) for w in WORDS]
+
+
+def test_locate_box_finds_word_run():
+    box = locate_box("granite harbor", LOCATE_WORDS, BOXES)
+    # Union of the GRANITE and HARBOR word boxes, nothing more.
+    assert box == (0.4, 0.5, 0.58, 0.55)
+
+
+def test_locate_box_tolerates_near_miss_window():
+    # A near-miss window differs from the words at the edges; the fuzzy
+    # floor still places it ("granite harbour" over HARBOR words).
+    box = locate_box("granite harbour", LOCATE_WORDS, BOXES)
+    assert box == (0.4, 0.5, 0.58, 0.55)
+
+
+def test_locate_box_returns_none_when_absent():
+    assert locate_box("hollow oak cellars", LOCATE_WORDS, BOXES) is None
+    assert locate_box("granite harbor", [], []) is None
 
 
 def test_match_name_normalized_tag():

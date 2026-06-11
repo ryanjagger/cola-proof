@@ -53,6 +53,9 @@ class WarningResult:
     note: str | None = None  # plain-language pointer at what differs
     source: str | None = None  # which reader produced found_text
     source_crop: int | None = None
+    # Where found_text sits on the crop, as (x0, y0, x1, y1) fractions;
+    # OCR-sourced only — the vision reader returns no geometry.
+    box: tuple[float, float, float, float] | None = None
 
 
 # Most-favorable-first, for picking one result across a record's crops.

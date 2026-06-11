@@ -31,6 +31,10 @@ RETRY_MEAN_CONF = 65.0  # first-pass mean below this triggers inverted retry
 class OcrResult:
     text: str
     words: list[tuple[str, float]] = field(default_factory=list)
+    # Word bounding boxes parallel to `words`, as (x0, y0, x1, y1)
+    # fractions of the original crop — resolution-independent so the UI
+    # can overlay them at any display scale.
+    word_boxes: list[tuple[float, float, float, float]] = field(default_factory=list)
     mean_conf: float = 0.0
     low_conf_fraction: float = 1.0  # fraction of words below LOW_CONF
     inverted: bool = False  # the inverted pass won
@@ -52,17 +56,30 @@ def _prepare(data: bytes, dpi: int | None) -> Image.Image:
     return img
 
 
-def _run(img: Image.Image) -> tuple[str, list[tuple[str, float]]]:
+def _run(
+    img: Image.Image,
+) -> tuple[str, list[tuple[str, float]], list[tuple[float, float, float, float]]]:
     data = pytesseract.image_to_data(
         img, lang=LANGS, output_type=pytesseract.Output.DICT
     )
-    words = [
-        (w, float(c))
-        for w, c in zip(data["text"], data["conf"])
-        if w.strip() and float(c) >= 0
-    ]
+    words, boxes = [], []
+    for w, c, x, y, bw, bh in zip(
+        data["text"], data["conf"], data["left"], data["top"],
+        data["width"], data["height"],
+    ):
+        if not w.strip() or float(c) < 0:
+            continue
+        words.append((w, float(c)))
+        # Fractions of the OCR image == fractions of the original crop:
+        # _prepare only scales uniformly, so ratios survive the upscale.
+        boxes.append((
+            round(x / img.width, 4),
+            round(y / img.height, 4),
+            round((x + bw) / img.width, 4),
+            round((y + bh) / img.height, 4),
+        ))
     text = pytesseract.image_to_string(img, lang=LANGS)
-    return text.strip(), words
+    return text.strip(), words, boxes
 
 
 def _stats(words: list[tuple[str, float]]) -> tuple[float, float]:
@@ -75,22 +92,23 @@ def _stats(words: list[tuple[str, float]]) -> tuple[float, float]:
 def ocr_crop(data: bytes, dpi: int | None = None) -> OcrResult:
     start = time.monotonic()
     img = _prepare(data, dpi)
-    text, words = _run(img)
+    text, words, boxes = _run(img)
     mean_conf, low_frac = _stats(words)
     inverted = False
 
     if mean_conf < RETRY_MEAN_CONF:
-        inv_text, inv_words = _run(ImageOps.invert(img))
+        inv_text, inv_words, inv_boxes = _run(ImageOps.invert(img))
         inv_mean, inv_low = _stats(inv_words)
         # Prefer the inverted pass only when it is clearly better.
         if inv_mean > mean_conf + 5 and len(inv_words) >= len(words):
-            text, words = inv_text, inv_words
+            text, words, boxes = inv_text, inv_words, inv_boxes
             mean_conf, low_frac = inv_mean, inv_low
             inverted = True
 
     return OcrResult(
         text=text,
         words=words,
+        word_boxes=boxes,
         mean_conf=round(mean_conf, 1),
         low_conf_fraction=round(low_frac, 3),
         inverted=inverted,

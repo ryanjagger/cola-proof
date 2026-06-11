@@ -40,6 +40,21 @@ class Outcome(str, Enum):
     MISSING = "missing"
 
 
+@dataclass(frozen=True)
+class SourcedText:
+    """A label text plus where it came from, so a verdict can say which
+    reader produced the value it matched. Matchers also accept plain
+    strings (source unknown) — tests and ad-hoc callers stay simple."""
+
+    text: str
+    source: str | None = None  # "ocr" | "vision" | "form"
+    crop_index: int | None = None
+
+
+def _sourced(texts) -> list[SourcedText]:
+    return [t if isinstance(t, SourcedText) else SourcedText(t or "") for t in texts]
+
+
 @dataclass
 class Verdict:
     field: str
@@ -49,6 +64,8 @@ class Verdict:
     score: float | None = None
     normalized: bool = False  # comparison used normalized forms
     note: str | None = None
+    source: str | None = None  # which reader produced label_value
+    source_crop: int | None = None
 
 
 def normalize_text(s: str) -> str:
@@ -72,15 +89,17 @@ def match_name(field: str, form_value: str, label_texts: list[str]) -> Verdict:
     needle = normalize_text(form_value)
     if not needle:
         return Verdict(field, form_value, None, Outcome.MISSING, note="empty form value")
-    best_score, best_text, scattered = 0.0, None, False
-    for text in label_texts:
-        hay = normalize_text(text or "")
+    sourced = _sourced(label_texts)
+    best_score, best_text, best_src, scattered = 0.0, None, None, False
+    for st in sourced:
+        hay = normalize_text(st.text)
         if not hay:
             continue
         a = fuzz.partial_ratio_alignment(needle, hay)
         if a is not None and a.score > best_score:
             best_score = a.score
             best_text = hay[a.dest_start : a.dest_end].strip()
+            best_src = st
             scattered = False
         # Names are often split across visual lines ("TOMMYROTTER" ...
         # "DISTILLERY") so a contiguous window under-scores them;
@@ -88,15 +107,20 @@ def match_name(field: str, form_value: str, label_texts: list[str]) -> Verdict:
         ts = fuzz.token_set_ratio(needle, hay)
         if ts > best_score:
             best_score = ts
+            best_src = st  # best_text may lag a prior window; source follows the score
             scattered = True
     # "(normalized)" is shown only when normalization did real work: the
     # form string never appears verbatim on the label.
-    normalized = not any(form_value in (t or "") for t in label_texts)
+    normalized = not any(form_value in st.text for st in sourced)
     note = "words found non-adjacent on label" if scattered else None
+    src = best_src.source if best_src else None
+    src_crop = best_src.crop_index if best_src else None
     if best_score >= EXACT_THRESHOLD:
-        return Verdict(field, form_value, best_text, Outcome.EXACT, best_score, normalized, note)
+        return Verdict(field, form_value, best_text, Outcome.EXACT, best_score,
+                       normalized, note, src, src_crop)
     if best_score >= NEAR_THRESHOLD:
-        return Verdict(field, form_value, best_text, Outcome.NEAR_MISS, best_score, normalized, note)
+        return Verdict(field, form_value, best_text, Outcome.NEAR_MISS, best_score,
+                       normalized, note, src, src_crop)
     # Below the near band a fuzzy name score is noise: "different brand"
     # and "unreadable label" are indistinguishable, so a name never
     # hard-fails on OCR — it reads as not-found and goes to review.
@@ -162,18 +186,25 @@ def match_net_contents(form_value: str, label_texts: list[str]) -> Verdict:
             note="form value not parseable as a volume",
         )
     form_ml, _ = form_parsed
-    found = [p for t in label_texts if t for p in parse_net_contents_all(t)]
+    found = [
+        (ml, s, st)
+        for st in _sourced(label_texts)
+        if st.text
+        for ml, s in parse_net_contents_all(st.text)
+    ]
     if not found:
         return Verdict("net_contents", form_value, None, Outcome.MISSING)
     # Any volume statement on any crop stating the right volume satisfies
     # the check; pick the closest candidate.
-    label_ml, label_str = min(found, key=lambda x: abs(x[0] - form_ml))
+    label_ml, label_str, src = min(found, key=lambda x: abs(x[0] - form_ml))
     if abs(label_ml - form_ml) < 0.5:
         return Verdict(
             "net_contents", form_value, label_str, Outcome.EXACT, 100.0,
             normalized=label_str.strip().lower() != form_value.strip().lower(),
+            source=src.source, source_crop=src.crop_index,
         )
-    return Verdict("net_contents", form_value, label_str, Outcome.MISMATCH, 0.0)
+    return Verdict("net_contents", form_value, label_str, Outcome.MISMATCH, 0.0,
+                   source=src.source, source_crop=src.crop_index)
 
 
 # --- alcohol content ------------------------------------------------------
@@ -216,7 +247,12 @@ def match_abv(form_value: str, label_texts: list[str]) -> Verdict:
             note="form value not parseable as ABV",
         )
     form_pct, _ = form_parsed
-    found = [p for t in label_texts if t for p in parse_abv_all(t)]
+    found = [
+        (pct, s, st)
+        for st in _sourced(label_texts)
+        if st.text
+        for pct, s in parse_abv_all(st.text)
+    ]
     # An implausible reading ("00%", "90%") is OCR garbage, not evidence
     # of a wrong label: only plausible candidates may drive a mismatch.
     plausible = [p for p in found if _ABV_PLAUSIBLE[0] <= p[0] <= _ABV_PLAUSIBLE[1]]
@@ -225,13 +261,15 @@ def match_abv(form_value: str, label_texts: list[str]) -> Verdict:
             f"only implausible reading ({found[0][1]!r})" if found else None
         )
         return Verdict("alcohol_content", form_value, None, Outcome.MISSING, note=note)
-    label_pct, label_str = min(plausible, key=lambda x: abs(x[0] - form_pct))
+    label_pct, label_str, src = min(plausible, key=lambda x: abs(x[0] - form_pct))
     if abs(label_pct - form_pct) < 0.05:
         return Verdict(
             "alcohol_content", form_value, label_str, Outcome.EXACT, 100.0,
             normalized=label_str.strip() != form_value.strip(),
+            source=src.source, source_crop=src.crop_index,
         )
-    return Verdict("alcohol_content", form_value, label_str, Outcome.MISMATCH, 0.0)
+    return Verdict("alcohol_content", form_value, label_str, Outcome.MISMATCH, 0.0,
+                   source=src.source, source_crop=src.crop_index)
 
 
 # --- class / type ---------------------------------------------------------
@@ -277,9 +315,9 @@ def match_class_type(description: str, label_texts: list[str]) -> Verdict:
             "class_type", description, None, Outcome.MISSING,
             note="no usable terms in description",
         )
-    best_score, best_text = 0.0, None
-    for text in label_texts:
-        hay = normalize_text(text or "")
+    best_score, best_text, best_src = 0.0, None, None
+    for st in _sourced(label_texts):
+        hay = normalize_text(st.text)
         if not hay:
             continue
         for term in terms:
@@ -287,15 +325,18 @@ def match_class_type(description: str, label_texts: list[str]) -> Verdict:
             if a is not None and a.score > best_score:
                 best_score = a.score
                 best_text = hay[a.dest_start : a.dest_end].strip()
+                best_src = st
+    src = best_src.source if best_src else None
+    src_crop = best_src.crop_index if best_src else None
     if best_score >= NEAR_THRESHOLD:
         return Verdict(
             "class_type", description, best_text, Outcome.EXACT, best_score,
-            normalized=True,
+            normalized=True, source=src, source_crop=src_crop,
         )
     if best_score > 60:
         return Verdict(
             "class_type", description, best_text, Outcome.NEAR_MISS, best_score,
-            normalized=True,
+            normalized=True, source=src, source_crop=src_crop,
         )
     return Verdict("class_type", description, None, Outcome.MISSING, best_score)
 
@@ -305,11 +346,18 @@ def match_class_type(description: str, label_texts: list[str]) -> Verdict:
 
 def format_check_abv(label_texts: list[str]) -> Verdict:
     """ABV present and plausible on the label (06-2016 forms)."""
-    found = [p for t in label_texts if t for p in parse_abv_all(t)]
+    found = [
+        (pct, s, st)
+        for st in _sourced(label_texts)
+        if st.text
+        for pct, s in parse_abv_all(st.text)
+    ]
     plausible = [p for p in found if _ABV_PLAUSIBLE[0] <= p[0] <= _ABV_PLAUSIBLE[1]]
     if plausible:
         return Verdict("alcohol_content", None, plausible[0][1], Outcome.EXACT,
-                       100.0, note="not on form — format check only")
+                       100.0, note="not on form — format check only",
+                       source=plausible[0][2].source,
+                       source_crop=plausible[0][2].crop_index)
     note = "not on form — format check only"
     if found:
         # Garbage readings are doubt, not evidence: review, never fail.
@@ -319,11 +367,18 @@ def format_check_abv(label_texts: list[str]) -> Verdict:
 
 def format_check_net_contents(label_texts: list[str]) -> Verdict:
     """Net contents present and plausible on the label (06-2016 forms)."""
-    found = [p for t in label_texts if t for p in parse_net_contents_all(t)]
+    found = [
+        (ml, s, st)
+        for st in _sourced(label_texts)
+        if st.text
+        for ml, s in parse_net_contents_all(st.text)
+    ]
     plausible = [p for p in found if 20.0 <= p[0] <= 200000.0]
     if plausible:
         return Verdict("net_contents", None, plausible[0][1], Outcome.EXACT,
-                       100.0, note="not on form — format check only")
+                       100.0, note="not on form — format check only",
+                       source=plausible[0][2].source,
+                       source_crop=plausible[0][2].crop_index)
     note = "not on form — format check only"
     if found:
         note += f"; only implausible reading ({found[0][1]!r})"

@@ -19,6 +19,8 @@ from enum import Enum
 
 from rapidfuzz import fuzz
 
+from .match import SourcedText
+
 STATUTORY_PREFIX = "GOVERNMENT WARNING:"
 STATUTORY_BODY = (
     "(1) According to the Surgeon General, women should not drink "
@@ -49,6 +51,8 @@ class WarningResult:
     found_text: str | None  # normalized text we judged, for the UI
     score: float  # body similarity 0-100
     note: str | None = None  # plain-language pointer at what differs
+    source: str | None = None  # which reader produced found_text
+    source_crop: int | None = None
 
 
 # Most-favorable-first, for picking one result across a record's crops.
@@ -207,15 +211,24 @@ def validate_warning(text: str | None) -> WarningResult:
     return WarningResult(WarningStatus.MISSING, found, score)
 
 
-def validate_warning_across(texts: list[str | None]) -> WarningResult:
+def validate_warning_across(texts) -> WarningResult:
     """Best result across all of a record's readable crops.
 
     The warning only has to appear somewhere on the container, so the
-    most favorable crop wins.
+    most favorable crop wins. Texts may be plain strings or SourcedText;
+    the winner's source is recorded on the result (provenance only — the
+    pick logic and every pass/fail decision are unchanged).
     """
-    results = [validate_warning(t) for t in texts] or [
-        WarningResult(WarningStatus.MISSING, None, 0.0)
+    sourced = [
+        t if isinstance(t, SourcedText) else SourcedText(t or "") for t in texts
     ]
-    return min(
-        results, key=lambda r: (_PRECEDENCE.index(r.status), -r.score)
+    pairs = [(validate_warning(st.text), st) for st in sourced] or [
+        (WarningResult(WarningStatus.MISSING, None, 0.0), SourcedText(""))
+    ]
+    best, src = min(
+        pairs, key=lambda p: (_PRECEDENCE.index(p[0].status), -p[0].score)
     )
+    if best.found_text is not None:
+        best.source = src.source
+        best.source_crop = src.crop_index
+    return best

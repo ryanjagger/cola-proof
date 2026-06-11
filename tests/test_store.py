@@ -137,3 +137,24 @@ def test_record_roundtrip_inflates_json(store):
     assert r["crops"][0]["kind"] == "front"
     assert r["warning"]["status"] == "near"
     assert r["escalation"] == ["brand_name: near_miss"]
+
+
+def test_old_verdicts_without_source_round_trip(store):
+    """Records written before source attribution existed lack the
+    source/source_crop keys; the store serves them verbatim — the
+    frontend treats the absent keys as unknown."""
+    b = store.create_batch("batch")
+    rid = store.add_record(b["id"], "a.pdf")
+    store.record_done(
+        rid,
+        ttb_id="x",
+        auto_status="Needs Review",
+        form={},
+        crops=[],
+        verdicts=[{"field": "brand_name", "outcome": "near_miss"}],
+        warning={"status": "near", "score": 97.0},
+        escalation=[],
+    )
+    r = store.get_record(rid)
+    assert "source" not in r["verdicts"][0]
+    assert "source" not in r["warning"]

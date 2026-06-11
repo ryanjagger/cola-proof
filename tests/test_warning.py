@@ -2,6 +2,7 @@
 
 import pytest
 
+from server.pipeline.match import SourcedText
 from server.pipeline.warning import (
     STATUTORY_BODY,
     STATUTORY_PREFIX,
@@ -158,3 +159,29 @@ def test_across_no_crops():
 def test_wording_deviations_never_exact(mutation, max_status):
     r = validate_warning(f"{STATUTORY_PREFIX} {mutation(STATUTORY_BODY)}")
     assert r.status != WarningStatus.EXACT
+
+
+# --- source attribution -------------------------------------------------------
+
+
+def test_across_crops_attributes_winning_source():
+    r = validate_warning_across([
+        SourcedText("front label text only", "ocr", 0),
+        SourcedText(CANONICAL, "vision", 1),
+    ])
+    assert r.status == WarningStatus.EXACT
+    assert r.source == "vision"
+    assert r.source_crop == 1
+
+
+def test_across_plain_strings_have_no_source():
+    r = validate_warning_across(["front label text only", CANONICAL])
+    assert r.status == WarningStatus.EXACT
+    assert r.source is None
+    assert r.source_crop is None
+
+
+def test_across_nothing_found_has_no_source():
+    r = validate_warning_across([SourcedText("front label text only", "ocr", 0)])
+    assert r.status == WarningStatus.MISSING
+    assert r.source is None

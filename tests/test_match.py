@@ -8,6 +8,7 @@ import pytest
 
 from server.pipeline.match import (
     Outcome,
+    SourcedText,
     aggregate_outcomes,
     format_check_abv,
     format_check_net_contents,
@@ -209,3 +210,75 @@ def test_aggregate_outcomes():
     assert aggregate_outcomes([E, X, E]) == "Needs Review"
     assert aggregate_outcomes([E, N, M]) == "Fail"
     assert aggregate_outcomes([]) == "Pass"
+
+
+# --- source attribution -------------------------------------------------------
+
+
+def test_match_name_attributes_winning_source():
+    v = match_name("brand_name", "OLD CARTER", [
+        SourcedText("nothing here", "ocr", 0),
+        SourcedText("Old Carter Whiskey", "vision", 2),
+    ])
+    assert v.outcome == Outcome.EXACT
+    assert v.source == "vision"
+    assert v.source_crop == 2
+
+
+def test_match_name_plain_strings_have_no_source():
+    v = match_name("brand_name", "OLD CARTER", ["Old Carter Whiskey"])
+    assert v.outcome == Outcome.EXACT
+    assert v.source is None
+    assert v.source_crop is None
+
+
+def test_match_name_missing_has_no_source():
+    v = match_name("brand_name", "HOWLING MOON",
+                   [SourcedText("Cascade Winery Table Red", "ocr", 0)])
+    assert v.outcome == Outcome.MISSING
+    assert v.source is None
+
+
+def test_match_net_contents_attributes_source():
+    v = match_net_contents("750 MILLILITERS", [
+        SourcedText("no volumes here", "ocr", 0),
+        SourcedText("750 ml", "vision", 1),
+    ])
+    assert v.outcome == Outcome.EXACT
+    assert v.source == "vision"
+    assert v.source_crop == 1
+
+
+def test_match_net_contents_mismatch_keeps_source():
+    # Mismatch attribution matters: the vision-only demotion rule keeps
+    # the verdict object, so the dev view must say who saw the value.
+    v = match_net_contents("750 MILLILITERS", [SourcedText("500 ml", "ocr", 1)])
+    assert v.outcome == Outcome.MISMATCH
+    assert v.source == "ocr"
+    assert v.source_crop == 1
+
+
+def test_match_abv_attributes_source():
+    v = match_abv("42", [SourcedText("Alc. 42% by Vol", "vision", 1)])
+    assert v.outcome == Outcome.EXACT
+    assert v.source == "vision"
+    assert v.source_crop == 1
+
+
+def test_match_class_type_attributes_source():
+    v = match_class_type("OTHER GRAPE BRANDY (PISCO, GRAPPA) FB",
+                         [SourcedText("PISCO ITALIA", "ocr", 0)])
+    assert v.outcome == Outcome.EXACT
+    assert v.source == "ocr"
+    assert v.source_crop == 0
+
+
+def test_format_checks_attribute_source():
+    v = format_check_net_contents([SourcedText("750 ml", "vision", 3)])
+    assert v.outcome == Outcome.EXACT
+    assert v.source == "vision"
+    assert v.source_crop == 3
+    v = format_check_abv([SourcedText("ALC. 13.5% BY VOL", "ocr", 2)])
+    assert v.outcome == Outcome.EXACT
+    assert v.source == "ocr"
+    assert v.source_crop == 2

@@ -45,3 +45,12 @@ def test_domestic_wine_passes():
     r = process_pdf(SAMPLES / "13158001000059.pdf", run_ocr=True)
     assert r.auto_status == "Pass"
     assert not r.escalation_reasons
+
+
+def test_tier_a_sources_attributed(pisco):
+    crop_indexes = {c.index for c in pisco.crops}
+    for v in pisco.verdicts:
+        assert v.source == "ocr", v.field
+        assert v.source_crop in crop_indexes, v.field
+    assert pisco.warning.source == "ocr"
+    assert pisco.warning.source_crop in crop_indexes

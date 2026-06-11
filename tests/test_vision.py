@@ -187,6 +187,10 @@ def test_escalation_upgrades_corroborated_record_to_pass():
     assert record.auto_status == "Pass"
     assert record.warning.status == WarningStatus.EXACT
     assert all(v.outcome == Outcome.EXACT for v in record.verdicts)
+    # Provenance: the values that resolved the record came from Tier B.
+    by_field = {v.field: v for v in record.verdicts}
+    assert by_field["brand_name"].source == "vision"
+    assert record.warning.source == "vision"
 
 
 def test_uncorroborated_vision_warning_stays_in_review():
@@ -205,6 +209,8 @@ def test_uncorroborated_vision_warning_stays_in_review():
     # ...but the warning is demoted to near -> the agent verifies it.
     assert record.warning.status == WarningStatus.NEAR
     assert record.auto_status == "Needs Review"
+    # The demotion must not lose who read it: vision-only is the story.
+    assert record.warning.source == "vision"
 
 
 def test_vision_only_numeric_mismatch_demoted_to_review():
@@ -221,6 +227,7 @@ def test_vision_only_numeric_mismatch_demoted_to_review():
     by_field = {v.field: v for v in record.verdicts}
     assert by_field["net_contents"].outcome == Outcome.NEAR_MISS
     assert by_field["net_contents"].label_value == "500 ml"  # still shown
+    assert by_field["net_contents"].source == "vision"  # demotion keeps source
     assert by_field["alcohol_content"].outcome == Outcome.NEAR_MISS
     assert record.auto_status == "Needs Review"
 
@@ -237,6 +244,10 @@ def test_corroborated_numeric_mismatch_still_fails():
     escalate(record, fake)
     by_field = {v.field: v for v in record.verdicts}
     assert by_field["net_contents"].outcome == Outcome.MISMATCH
+    # Tier A's own reading wins the pool, so the mismatch is attributed
+    # to OCR on the back crop — corroboration, not a vision-only claim.
+    assert by_field["net_contents"].source == "ocr"
+    assert by_field["net_contents"].source_crop == 1
     assert record.auto_status == "Fail"
 
 
@@ -293,3 +304,31 @@ def test_numeric_fields_match_from_other_crops():
     assert by_field["net_contents"].outcome == Outcome.EXACT
     # brand still has no front/back evidence: 'other' text never feeds names
     assert by_field["brand_name"].outcome == Outcome.MISSING
+
+
+def test_container_fallback_attributes_form_source():
+    """A volume absent from every label but recorded as blown/branded/
+    embossed container wording (form item 15/18) satisfies the check —
+    and the verdict says the value came from the form, not a reader."""
+    form = ParsedForm(
+        ttb_id="x", brand_name="VIEJO TONEL", serial_number="1",
+        net_contents="750 MILLILITERS", alcohol_content="42",
+        class_type_description="OTHER GRAPE BRANDY (PISCO, GRAPPA) FB",
+        has_net_contents_field=True, has_alcohol_content_field=True,
+        container_wording="750 ML",
+    )
+    result = RecordResult(path=Path("x.pdf"), form=form)
+    result.crops = [_crop(0, "front")]
+    result.ocr = [OcrResult(
+        text="Pisco Viejo Tonel Alc. 42% by Vol", words=[("x", 90.0)],
+        mean_conf=90.0, low_conf_fraction=0.0,
+    )]
+    evaluate(result)
+    by_field = {v.field: v for v in result.verdicts}
+    assert by_field["net_contents"].outcome == Outcome.EXACT
+    assert "container" in by_field["net_contents"].note
+    assert by_field["net_contents"].source == "form"
+    assert by_field["net_contents"].source_crop is None
+    # Values actually read off the crop are attributed to OCR.
+    assert by_field["alcohol_content"].source == "ocr"
+    assert by_field["alcohol_content"].source_crop == 0

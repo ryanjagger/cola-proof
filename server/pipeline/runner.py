@@ -23,6 +23,7 @@ import fitz
 from .extract_labels import LabelCrop, extract_labels
 from .match import (
     Outcome,
+    SourcedText,
     Verdict,
     aggregate_outcomes,
     format_check_abv,
@@ -96,27 +97,32 @@ def evaluate(result: RecordResult) -> None:
     already gathered (result.vision)."""
     form = result.form
     matchable_texts = [
-        o.text
+        SourcedText(o.text, "ocr", c.index)
         for c, o in zip(result.crops, result.ocr)
         if c.matchable and o.readable
     ]
     other_texts = [
-        o.text
+        SourcedText(o.text, "ocr", c.index)
         for c, o in zip(result.crops, result.ocr)
         if not c.matchable and o.readable
     ]
-    all_texts = [o.text for o in result.ocr if o.readable]
+    all_texts = [
+        SourcedText(o.text, "ocr", c.index)
+        for c, o in zip(result.crops, result.ocr)
+        if o.readable
+    ]
     # Tier A's reading pool, kept aside before vision text is mixed in:
     # the numeric corroboration rule below needs to ask what OCR alone saw.
     tier_a_numeric_texts = matchable_texts + other_texts
     for c in result.crops:
         v = result.vision.get(c.index)
         if v and v.ok and v.combined_text:
-            all_texts.append(v.combined_text)
+            st = SourcedText(v.combined_text, "vision", c.index)
+            all_texts.append(st)
             if c.matchable:
-                matchable_texts.append(v.combined_text)
+                matchable_texts.append(st)
             else:
-                other_texts.append(v.combined_text)
+                other_texts.append(st)
     # Net contents and ABV routinely live on neck/strip labels, so the
     # numeric matchers may use 'other' crops too: they only accept
     # unit/%/proof patterns, so stray text can't false-match the way a
@@ -166,6 +172,8 @@ def evaluate(result: RecordResult) -> None:
                 result.warning.score,
                 note="Only the backup reader could read the warning — "
                 "confirm the wording on the label image.",
+                source=result.warning.source,
+                source_crop=result.warning.source_crop,
             )
     outcomes = [v.outcome for v in verdicts]
     outcomes.append(_WARNING_OUTCOME[result.warning.status])
@@ -205,7 +213,7 @@ def escalate(result: RecordResult, client: VisionClient, max_crops: int = 3) -> 
 
 
 def _demote_vision_only_mismatches(
-    verdicts: list[Verdict], form: ParsedForm, tier_a_texts: list[str]
+    verdicts: list[Verdict], form: ParsedForm, tier_a_texts: list[SourcedText]
 ) -> None:
     """Numeric mirror of the warning corroboration rule: a MISMATCH whose
     label value exists only in a Tier B transcription is doubt, not
@@ -233,7 +241,7 @@ def _container_wording_fallback(verdict, rematch, form: ParsedForm):
     records that wording, so it legitimately satisfies the check."""
     if verdict.outcome != Outcome.MISSING or not form.container_wording:
         return verdict
-    retry = rematch([form.container_wording])
+    retry = rematch([SourcedText(form.container_wording, "form")])
     if retry.outcome == Outcome.EXACT:
         retry.note = "stated on container (form: blown/branded/embossed wording)"
         return retry
@@ -314,6 +322,11 @@ def _print_record(result: RecordResult) -> None:
             f'{c.width_in}"x{c.height_in}" {c.px_width}x{c.px_height}px '
             f"{c.dpi}dpi p{c.page} {c.ext}{aspect}{ocr_note}{tier_b}"
         )
+    def _src(source: str | None, crop: int | None) -> str:
+        if not source:
+            return ""
+        return f"  <- {source}" + (f" crop {crop}" if crop is not None else "")
+
     for v in result.verdicts:
         score = f" {v.score:.0f}" if v.score is not None else ""
         norm = " (normalized)" if v.normalized else ""
@@ -321,9 +334,14 @@ def _print_record(result: RecordResult) -> None:
         print(
             f"  {v.field:18s} {v.outcome.value:10s}{score} "
             f"form={v.form_value!r} label={v.label_value!r}{norm}{note}"
+            f"{_src(v.source, v.source_crop)}"
         )
     if result.warning:
-        print(f"  warning            {result.warning.status.value} ({result.warning.score:.0f})")
+        w = result.warning
+        print(
+            f"  warning            {w.status.value} ({w.score:.0f})"
+            f"{_src(w.source, w.source_crop)}"
+        )
     if result.auto_status:
         print(f"  AUTO-STATUS        {result.auto_status}")
     for r in result.escalation_reasons:

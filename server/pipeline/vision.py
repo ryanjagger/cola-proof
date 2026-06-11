@@ -40,14 +40,21 @@ PROMPT = (
     "field. NEVER guess, complete from memory, or correct spelling."
 )
 
+# maxLength is load-bearing, not cosmetic: llama.cpp compiles it into the
+# decoding grammar, which is the only reliable brake on greedy-decode
+# repetition loops (observed: a fabricated warning sentence repeated for
+# ~2800 tokens, ~50s of CPU decode per crop). warning_text's budget is
+# ~3x the statutory paragraph (~280 chars) because the model sometimes
+# letter-spaces transcriptions; a cut-short warning lands in review,
+# never a false pass.
 SCHEMA = {
     "type": "object",
     "properties": {
-        "brand_text": {"type": ["string", "null"]},
-        "abv_text": {"type": ["string", "null"]},
-        "net_contents_text": {"type": ["string", "null"]},
-        "warning_text": {"type": ["string", "null"]},
-        "full_text": {"type": ["string", "null"]},
+        "brand_text": {"type": ["string", "null"], "maxLength": 200},
+        "abv_text": {"type": ["string", "null"], "maxLength": 120},
+        "net_contents_text": {"type": ["string", "null"], "maxLength": 120},
+        "warning_text": {"type": ["string", "null"], "maxLength": 1000},
+        "full_text": {"type": ["string", "null"], "maxLength": 600},
     },
     "required": [
         "brand_text", "abv_text", "net_contents_text", "warning_text", "full_text",
@@ -134,8 +141,11 @@ class VisionClient:
         b64 = base64.b64encode(image_data).decode()
         payload = {
             "model": self.model,
+            # Ceiling above the grammar's worst case (~1000 tokens when
+            # every field maxes out letter-spaced), not a working budget;
+            # _parse_lenient salvages the rare overrun.
             "temperature": 0,
-            "max_tokens": 3000,
+            "max_tokens": 1200,
             "messages": [
                 {
                     "role": "user",

@@ -28,8 +28,11 @@ class Settings:
     )
     # Bounded Tier B concurrency: the CPU model is slow, so escalations
     # queue behind a small worker pool while Tier A keeps streaming.
+    # Default matches the reference sidecar's single slot (--parallel 1);
+    # extra workers just stack in the server's queue and burn the HTTP
+    # timeout waiting. Raise only for runtimes that decode in parallel.
     vision_workers: int = field(
-        default_factory=lambda: int(os.environ.get("VISION_WORKERS", "2"))
+        default_factory=lambda: int(os.environ.get("VISION_WORKERS", "1"))
     )
     ocr_workers: int = field(
         default_factory=lambda: int(os.environ.get("OCR_WORKERS", "4"))

@@ -94,6 +94,7 @@ def _finish_record(record_id: str, batch_id: str, result: RecordResult) -> None:
 
 
 def _escalate_record(record_id: str, batch_id: str, result: RecordResult) -> None:
+    store.record_vision_reading(record_id)  # a worker picked it up
     try:
         escalate(result, _vision)
     except Exception:
@@ -112,9 +113,9 @@ def _process_record(record_id: str, batch_id: str, pdf_path: Path) -> None:
             store.record_error(record_id, "; ".join(result.errors))
             return
         if _vision and result.escalation_reasons:
-            # Marked 'escalating' while it waits its turn for Tier B; the
-            # rest of the batch keeps streaming.
-            store.record_escalating(record_id)
+            # Queued for Tier B (flips to vision_reading when a worker
+            # picks it up); the rest of the batch keeps streaming.
+            store.record_vision_queued(record_id)
             _vision_executor.submit(_escalate_record, record_id, batch_id, result)
             return
         _finish_record(record_id, batch_id, result)

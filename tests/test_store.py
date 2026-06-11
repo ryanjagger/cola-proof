@@ -23,6 +23,23 @@ def _finish(store, record_id, auto_status):
     )
 
 
+def test_vision_states_roundtrip_and_recover(store):
+    """Queued-for-vision and being-read are distinct visible states, and
+    both must be re-enqueued by restart recovery like any in-flight
+    record — a redeploy mid-queue must not strand them."""
+    b = store.create_batch("batch")
+    rid = store.add_record(b["id"], "a.pdf")
+    store.record_vision_queued(rid)
+    assert store.get_record(rid)["state"] == "vision_queued"
+    assert rid in {r["id"] for r in store.list_unfinished()}
+    store.record_vision_reading(rid)
+    assert store.get_record(rid)["state"] == "vision_reading"
+    assert rid in {r["id"] for r in store.list_unfinished()}
+    _finish(store, rid, "Pass")
+    assert store.get_record(rid)["state"] == "done"
+    assert rid not in {r["id"] for r in store.list_unfinished()}
+
+
 def test_pass_auto_approves_by_system(store):
     b = store.create_batch("batch")
     rid = store.add_record(b["id"], "a.pdf")

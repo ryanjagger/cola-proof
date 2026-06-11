@@ -220,7 +220,11 @@ function checksDisagreement(r: RecordRow): string | null {
 function RowStatus({ record: r }: { record: RecordRow }) {
   if (r.state === 'error')
     return <span className={`${CHIP} bg-stone-200 text-stone-700`}>Couldn’t process</span>
-  if (r.state === 'escalating')
+  if (r.state === 'vision_queued')
+    return (
+      <span className={`${CHIP} bg-stone-100 font-normal text-stone-500`}>Waiting…</span>
+    )
+  if (r.state === 'vision_reading')
     return (
       <span className={`${CHIP} bg-stone-100 font-normal text-stone-500`}>
         Re-reading with AI…
@@ -264,7 +268,7 @@ function RecordRowItem({ record: r }: { record: RecordRow }) {
   const reasons = quiet ? [] : recordReasons(r)
   const title = r.form?.brand_name || r.ttb_id || r.filename
 
-  if (r.state === 'pending' || r.state === 'processing' || r.state === 'escalating') {
+  if (r.state !== 'done' && r.state !== 'error') {
     return (
       <li className="flex items-center justify-between rounded-xl border border-stone-200 bg-white/60 px-4 py-2.5 text-stone-400">
         <span className="text-sm">{r.filename}</span>

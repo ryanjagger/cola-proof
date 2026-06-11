@@ -159,12 +159,14 @@ class Store:
 
     def list_unfinished(self) -> list[dict]:
         """Records caught mid-flight by a restart: a new process holds no
-        worker for anything still 'pending'/'processing'/'escalating', so
-        without re-enqueueing they would sit there forever."""
+        worker for anything not yet done/error, so without re-enqueueing
+        they would sit there forever. ('escalating' is the pre-split name
+        of the vision states — kept so a deploy can't strand records.)"""
         with self._conn() as c:
             rows = c.execute(
                 "SELECT id, batch_id, filename FROM records "
-                "WHERE state IN ('pending','processing','escalating') "
+                "WHERE state IN ('pending','processing','escalating',"
+                "'vision_queued','vision_reading') "
                 "ORDER BY created_at, id"
             ).fetchall()
         return [dict(r) for r in rows]
@@ -175,12 +177,19 @@ class Store:
                 "UPDATE records SET state='processing' WHERE id=?", (record_id,)
             )
 
-    def record_escalating(self, record_id: str) -> None:
-        """Tier A is done; the record is queued for the (slow) vision
+    def record_vision_queued(self, record_id: str) -> None:
+        """Tier A is done; the record is in line for the (slow) vision
         reader. A distinct state so the UI can say why it's waiting."""
         with self._conn() as c:
             c.execute(
-                "UPDATE records SET state='escalating' WHERE id=?", (record_id,)
+                "UPDATE records SET state='vision_queued' WHERE id=?", (record_id,)
+            )
+
+    def record_vision_reading(self, record_id: str) -> None:
+        """A vision worker has picked the record up and is reading."""
+        with self._conn() as c:
+            c.execute(
+                "UPDATE records SET state='vision_reading' WHERE id=?", (record_id,)
             )
 
     def record_done(

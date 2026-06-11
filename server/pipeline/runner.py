@@ -408,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Tier B endpoint (e.g. http://localhost:8090/v1); enables escalation",
     )
     args = ap.parse_args(argv)
-    client = VisionClient(args.vision, "qwen2.5-vl-3b") if args.vision else None
+    client = VisionClient(args.vision, "qwen3-vl-4b") if args.vision else None
 
     failures = 0
     n_crops = 0

@@ -24,7 +24,7 @@ class Settings:
         default_factory=lambda: os.environ.get("VISION_BASE_URL", "")
     )
     vision_model: str = field(
-        default_factory=lambda: os.environ.get("VISION_MODEL", "qwen2.5-vl-3b")
+        default_factory=lambda: os.environ.get("VISION_MODEL", "qwen3-vl-4b")
     )
     # Bounded Tier B concurrency: the CPU model is slow, so escalations
     # queue behind a small worker pool while Tier A keeps streaming.

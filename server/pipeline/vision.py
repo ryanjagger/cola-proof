@@ -37,8 +37,10 @@ PROMPT = (
     "- full_text: all other readable text on the label, briefly — skip "
     "decorative flourishes and repeated text\n"
     "Rules: copy only what is visible in the image. Write words normally — "
-    "never insert spaces between the letters of a word. If something is "
-    "not printed on the label or you cannot read it, return null for that "
+    "never insert spaces between the letters of a word. Punctuation is part "
+    "of the text: copy every comma, period, colon, parenthesis, and hyphen "
+    "exactly as printed, and add none of your own. If something is not "
+    "printed on the label or you cannot read it, return null for that "
     "field. NEVER guess, complete from memory, or correct spelling."
 )
 

@@ -29,7 +29,7 @@ Other contents:
 
 ## Architecture
 
-Per-record pipeline (`server/pipeline/`): parse Part I form fields from the PDF text layer (layout-aware, word x/y coordinates — `parse_form.py`) → extract label crops, classified deterministically by their text-layer captions, not size heuristics (`extract_labels.py`) → Tier A local OCR with Tesseract, keeping per-word confidences (`ocr.py`) → Tier B escalation to a self-hosted vision model (Qwen2.5-VL-3B GGUF on a llama-server sidecar, OpenAI-compatible client, `VISION_BASE_URL` env — `vision.py`) → field-aware normalization and three-valued matching: exact / near-miss (review) / mismatch (`match.py`) → deterministic government-warning validation (`warning.py`). `runner.py` orchestrates and owns the escalation logic; Tier B runs as a bounded background queue because the CPU model is slow.
+Per-record pipeline (`server/pipeline/`): parse Part I form fields from the PDF text layer (layout-aware, word x/y coordinates — `parse_form.py`) → extract label crops, classified deterministically by their text-layer captions, not size heuristics (`extract_labels.py`) → Tier A local OCR with Tesseract, keeping per-word confidences (`ocr.py`) → Tier B escalation to a self-hosted vision model (Qwen3-VL-4B GGUF on a llama-server sidecar, OpenAI-compatible client, `VISION_BASE_URL` env — `vision.py`) → field-aware normalization and three-valued matching: exact / near-miss (review) / mismatch (`match.py`) → deterministic government-warning validation (`warning.py`). `runner.py` orchestrates and owns the escalation logic; Tier B runs as a bounded background queue because the CPU model is slow.
 
 Key facts that shape the code:
 

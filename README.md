@@ -41,10 +41,10 @@ instead of getting a second read.
 ### 2. Vision tier (optional, recommended)
 
 Tier B re-reads doubtful labels with a self-hosted vision model. Start the
-sidecar (first run downloads ~2 GB of model weights, then they're cached):
+sidecar (first run downloads ~3 GB of model weights, then they're cached):
 
 ```bash
-llama-server -hf ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M --port 8090
+llama-server -hf Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M --port 8090 --ctx-size 8192
 ```
 
 Then point the app at it:
@@ -73,7 +73,7 @@ after frontend changes.
 | ----------------- | -------------- | -------------------------------------------------- |
 | `DATA_DIR`        | `data`         | SQLite DB + per-batch media (PDFs, label crops)    |
 | `VISION_BASE_URL` | *(empty)*      | OpenAI-compatible Tier B endpoint; empty = Tier A only |
-| `VISION_MODEL`    | `qwen2.5-vl-3b`| Model name sent to the vision endpoint             |
+| `VISION_MODEL`    | `qwen3-vl-4b`  | Model name sent to the vision endpoint             |
 | `OCR_WORKERS`     | `4`            | Tier A worker pool size                            |
 | `VISION_WORKERS`  | `2`            | Tier B worker pool size (the CPU model is slow)    |
 

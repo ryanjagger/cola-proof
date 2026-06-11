@@ -25,6 +25,7 @@ export default function Detail() {
     if (!recordId) return
     setNote('')
     setError(null)
+    setSaving(false)
     getRecord(recordId).then((r) => {
       setRecord(r)
       setNote(r.note ?? '')

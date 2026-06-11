@@ -21,9 +21,9 @@ import {
 
 // Dev-only wording — deliberately not in plain.ts, agents never see it.
 const SOURCE_LABELS: Record<string, string> = {
-  ocr: 'tesseract',
-  vision: 'vision model',
-  form: 'form (container wording)',
+  ocr: 'OCR',
+  vision: 'Vision',
+  form: 'Form (container wording)',
 }
 
 const sourceLabel = (s?: string | null) => (s ? (SOURCE_LABELS[s] ?? s) : 'unknown')
@@ -234,16 +234,16 @@ function VerdictCard({ verdict: v, dev }: { verdict: Verdict; dev: boolean }) {
           <dd className="mt-0.5 font-mono">
             {v.label_value ?? <span className="text-stone-400">nothing found</span>}
           </dd>
+          {dev && (
+            <p className="mt-1 font-mono text-xs text-stone-500">
+              {v.label_value ? sourceLabel(v.source) : '—'}
+              {v.source_crop != null && <> · crop {v.source_crop}</>}
+              {v.score != null && <> · score {v.score.toFixed(1)}</>}
+              {v.normalized && ' · normalized'}
+            </p>
+          )}
         </div>
       </dl>
-      {dev && (
-        <p className="mt-2 font-mono text-xs text-stone-500">
-          read by: {v.label_value ? sourceLabel(v.source) : '—'}
-          {v.source_crop != null && <> · crop {v.source_crop}</>}
-          {v.score != null && <> · score {v.score.toFixed(1)}</>}
-          {v.normalized && ' · normalized'}
-        </p>
-      )}
     </div>
   )
 }

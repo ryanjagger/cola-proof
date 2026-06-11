@@ -294,7 +294,10 @@ def _escalation_reasons(result: RecordResult) -> list[str]:
         # Labels affixed as a photograph of the containers always get the
         # backup reader — there is no per-label crop for Tier A to trust.
         if c.kind == "photo":
-            reasons.append(f"crop {c.index} is a photograph of the containers")
+            reasons.append(
+                f"labels arrived as a photo of the containers (crop {c.index}) "
+                "— always re-read with AI"
+            )
     for c, o in zip(result.crops, result.ocr):
         if not c.matchable:
             continue

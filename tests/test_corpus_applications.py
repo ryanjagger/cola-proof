@@ -123,7 +123,7 @@ def test_photo_never_passes_on_tier_a_alone(photo_record):
     photo_record.ocr = [_perfect_ocr(photo_record)]
     evaluate(photo_record)
     assert photo_record.auto_status == "Needs Review"
-    assert any("photograph" in r for r in photo_record.escalation_reasons)
+    assert any("photo of the containers" in r for r in photo_record.escalation_reasons)
 
 
 def test_brand_spelling_conflict_goes_to_review():

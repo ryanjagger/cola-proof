@@ -370,24 +370,8 @@ function CropViewer({
 
   return (
     <section className="flex flex-col">
-      {crop ? (
-        <div className="overflow-auto rounded-xl border border-stone-200 bg-white p-2" style={{ maxHeight: '70vh' }}>
-          <img
-            src={cropUrl(record.id, crop.index)}
-            alt={crop.caption_type}
-            onClick={() => setZoom((z) => !z)}
-            className={`mx-auto cursor-zoom-in ${zoom ? 'w-[250%] max-w-none cursor-zoom-out' : 'max-h-[66vh] object-contain'}`}
-          />
-        </div>
-      ) : (
-        <iframe
-          src={pdfUrl(record.id)}
-          title="Full application PDF"
-          className="h-[70vh] w-full rounded-xl border border-stone-200 bg-white"
-        />
-      )}
-      <div className="mt-2 flex items-center justify-between">
-        <div className="flex gap-2">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-2">
           {crops.map((c) => (
             <button
               key={c.index}
@@ -422,6 +406,22 @@ function CropViewer({
           )}
         </div>
       </div>
+      {crop ? (
+        <div className="overflow-auto rounded-xl border border-stone-200 bg-white p-2" style={{ maxHeight: '70vh' }}>
+          <img
+            src={cropUrl(record.id, crop.index)}
+            alt={crop.caption_type}
+            onClick={() => setZoom((z) => !z)}
+            className={`mx-auto cursor-zoom-in ${zoom ? 'w-[250%] max-w-none cursor-zoom-out' : 'max-h-[66vh] object-contain'}`}
+          />
+        </div>
+      ) : (
+        <iframe
+          src={pdfUrl(record.id)}
+          title="Full application PDF"
+          className="h-[70vh] w-full rounded-xl border border-stone-200 bg-white"
+        />
+      )}
     </section>
   )
 }

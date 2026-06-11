@@ -161,7 +161,11 @@ def evaluate(result: RecordResult) -> None:
         )
         if tier_a_only.score < 55:
             result.warning = WarningResult(
-                WarningStatus.NEAR, result.warning.found_text, result.warning.score
+                WarningStatus.NEAR,
+                result.warning.found_text,
+                result.warning.score,
+                note="Only the backup reader could read the warning — "
+                "confirm the wording on the label image.",
             )
     outcomes = [v.outcome for v in verdicts]
     outcomes.append(_WARNING_OUTCOME[result.warning.status])

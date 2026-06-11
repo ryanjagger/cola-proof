@@ -227,6 +227,7 @@ function WarningCard({ record }: { record: RecordRow }) {
           Nothing legible was extracted — check the label image on the right.
         </p>
       )}
+      {w?.note && <p className="mt-2 text-sm text-stone-600">{w.note}</p>}
     </div>
   )
 }

@@ -94,6 +94,44 @@ def test_missing():
     assert validate_warning(None).status == WarningStatus.MISSING
 
 
+def test_found_text_trimmed_to_warning():
+    """OCR keeps reading past the warning into addresses and barcode
+    noise; the displayed text must stop where the statutory body ends."""
+    r = validate_warning(f"{CANONICAL} Bottled by Cascade Winery Grand Rapids, MI 49546")
+    assert r.status == WarningStatus.EXACT
+    assert r.found_text.endswith("health problems.")
+    assert "Cascade" not in r.found_text
+    assert r.note is None
+
+
+def test_near_trims_junk_and_notes_missing_period():
+    """The Cascade Winery case: body verbatim minus the final period,
+    followed by unrelated label text. Near (deterministic exactness),
+    junk trimmed, note points at the period."""
+    text = (
+        f"{STATUTORY_PREFIX} {STATUTORY_BODY[:-1].upper()} "
+        "Cascade Winery Grand Rapids, MI 49546 > Q TD 2 * ® O [= © = Le)"
+    )
+    r = validate_warning(text)
+    assert r.status == WarningStatus.NEAR
+    assert "Winery" not in r.found_text
+    assert "HEALTH PROBLEMS" in r.found_text
+    assert '"…may cause health problems."' in r.note
+
+
+def test_near_note_counts_further_differences():
+    """The Single Cask Nation case: two commas missing — the note shows
+    the first difference and says another follows."""
+    body = STATUTORY_BODY.replace("General,", "General").replace(
+        "machinery,", "machinery"
+    )
+    r = validate_warning(f"{STATUTORY_PREFIX} {body} JOIN US AT: www.example.com")
+    assert r.status == WarningStatus.NEAR
+    assert "JOIN US" not in r.found_text
+    assert '"…to the Surgeon General, women should not…"' in r.note
+    assert "plus 1 more difference after that" in r.note
+
+
 def test_across_crops_most_favorable_wins():
     r = validate_warning_across(["front label text only", CANONICAL])
     assert r.status == WarningStatus.EXACT

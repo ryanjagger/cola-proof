@@ -12,6 +12,7 @@ from "absent", because a false reject is worse than a slow review.
 
 from __future__ import annotations
 
+import difflib
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -47,6 +48,7 @@ class WarningResult:
     status: WarningStatus
     found_text: str | None  # normalized text we judged, for the UI
     score: float  # body similarity 0-100
+    note: str | None = None  # plain-language pointer at what differs
 
 
 # Most-favorable-first, for picking one result across a record's crops.
@@ -90,6 +92,68 @@ def _squash(text: str) -> str:
 _SQ_BODY = _squash(STATUTORY_BODY)
 _SQ_PREFIX = _squash(STATUTORY_PREFIX)  # "GOVERNMENTWARNING:"
 
+_WS = re.compile(r"\s")
+
+
+def _unsquash_index(spaced: str, sq_count: int) -> int:
+    """Index into `spaced` just past its first `sq_count` non-whitespace
+    characters — maps a position in squashed text back to readable text."""
+    if sq_count <= 0:
+        return 0
+    seen = 0
+    for i, ch in enumerate(spaced):
+        if not _WS.match(ch):
+            seen += 1
+            if seen == sq_count:
+                return i + 1
+    return len(spaced)
+
+
+def _trim_to_match(spaced: str, spaced_sq: str) -> str:
+    """Cut readable text down to the region that aligns with the statutory
+    body. OCR keeps reading past the warning into addresses, URLs, and
+    barcode noise; the UI should show the warning, not the neighborhood."""
+    a = fuzz.partial_ratio_alignment(_SQ_BODY.casefold(), spaced_sq.casefold())
+    if a is None or a.dest_end <= a.dest_start:
+        return spaced
+    start = _unsquash_index(spaced, a.dest_start)
+    end = _unsquash_index(spaced, a.dest_end)
+    return spaced[start:end].strip()
+
+
+def _context(words: list[str], start: int, end: int) -> str:
+    """The differing words plus a little surrounding context, quoted."""
+    lo = max(0, start - 3)
+    hi = min(len(words), max(end, start) + 3)
+    pre = "…" if lo > 0 else ""
+    post = "…" if hi < len(words) else ""
+    return f'"{pre}{" ".join(words[lo:hi])}{post}"'
+
+
+def _first_difference(found_body: str) -> str | None:
+    """Where the found body first departs from the statutory wording —
+    a word-level, case-insensitive diff, described in plain language so
+    the agent knows what to squint at on the label. Deterministic; only
+    ever annotates a non-exact result, never decides one."""
+    exp, got = STATUTORY_BODY.split(), found_body.split()
+    matcher = difflib.SequenceMatcher(
+        a=[w.casefold() for w in exp],
+        b=[w.casefold() for w in got],
+        autojunk=False,
+    )
+    diffs = [op for op in matcher.get_opcodes() if op[0] != "equal"]
+    if not diffs:
+        return None
+    _, i1, i2, j1, j2 = diffs[0]
+    note = (
+        f"The label reads {_context(got, j1, j2)}, but the required "
+        f"wording is {_context(exp, i1, i2)}"
+    )
+    if len(diffs) > 1:
+        more = len(diffs) - 1
+        note += f", plus {more} more difference{'s' if more > 1 else ''} after that."
+    return note
+
 
 def validate_warning(text: str | None) -> WarningResult:
     """Validate one crop's extracted text."""
@@ -103,7 +167,10 @@ def validate_warning(text: str | None) -> WarningResult:
         # (e.g. OCR mangled "GOVERNMENT").
         score = fuzz.partial_ratio(_SQ_BODY.casefold(), _squash(norm).casefold())
         if score >= NEAR_THRESHOLD:
-            return WarningResult(WarningStatus.NEAR, norm, score)
+            shown = _trim_to_match(norm, _squash(norm))
+            return WarningResult(
+                WarningStatus.NEAR, shown, score, note=_first_difference(shown)
+            )
         return WarningResult(WarningStatus.MISSING, None, score)
 
     prefix_found = m.group(0)
@@ -115,18 +182,28 @@ def validate_warning(text: str | None) -> WarningResult:
 
     body_exact = _SQ_BODY.casefold() in body_sq.casefold()
     prefix_caps = _squash(prefix_found) == _SQ_PREFIX
-    found = f"{prefix_found} {body}".strip()
 
-    if body_exact and prefix_caps:
-        return WarningResult(WarningStatus.EXACT, found, 100.0)
     if body_exact:
+        end_sq = body_sq.casefold().find(_SQ_BODY.casefold()) + len(_SQ_BODY)
+        body = body[: _unsquash_index(body, end_sq)].strip()
+        found = f"{prefix_found} {body}".strip()
+        if prefix_caps:
+            return WarningResult(WarningStatus.EXACT, found, 100.0)
         return WarningResult(WarningStatus.PREFIX_NOT_CAPS, found, 100.0)
 
-    score = fuzz.partial_ratio(_SQ_BODY.casefold(), body_sq.casefold())
+    a = fuzz.partial_ratio_alignment(_SQ_BODY.casefold(), body_sq.casefold())
+    score = a.score if a else 0.0
+    if a and a.dest_end > a.dest_start:
+        body = body[: _unsquash_index(body, a.dest_end)].strip()
+    found = f"{prefix_found} {body}".strip()
     if score >= NEAR_THRESHOLD:
-        return WarningResult(WarningStatus.NEAR, found, score)
+        return WarningResult(
+            WarningStatus.NEAR, found, score, note=_first_difference(body)
+        )
     if score >= MISMATCH_THRESHOLD:
-        return WarningResult(WarningStatus.MISMATCH, found, score)
+        return WarningResult(
+            WarningStatus.MISMATCH, found, score, note=_first_difference(body)
+        )
     return WarningResult(WarningStatus.MISSING, found, score)
 
 

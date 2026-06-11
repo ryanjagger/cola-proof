@@ -14,6 +14,7 @@ export interface WarningResult {
   status: 'exact' | 'prefix_not_caps' | 'near' | 'mismatch' | 'missing'
   found_text: string | null
   score: number
+  note?: string | null // absent on records processed before notes existed
 }
 
 export interface Crop {

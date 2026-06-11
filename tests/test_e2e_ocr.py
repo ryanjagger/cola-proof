@@ -14,7 +14,7 @@ from server.pipeline.match import Outcome
 from server.pipeline.runner import process_pdf
 from server.pipeline.warning import WarningStatus
 
-SAMPLES = Path(__file__).parent.parent / "sample-forms"
+SAMPLES = Path(__file__).parent.parent / "sample-forms" / "registry"
 
 
 @pytest.fixture(scope="module")

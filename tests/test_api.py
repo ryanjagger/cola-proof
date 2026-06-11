@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-SAMPLES = Path(__file__).parent.parent / "sample-forms"
+SAMPLES = Path(__file__).parent.parent / "sample-forms" / "registry"
 
 
 @pytest.fixture(scope="module")

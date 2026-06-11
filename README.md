@@ -34,7 +34,7 @@ cd web && npm install && npm run build   # build the SPA into web/dist
 DATA_DIR=data uv run uvicorn server.app:app --port 8000
 ```
 
-Open <http://localhost:8000> and drop PDFs (try `sample-forms/`). This runs
+Open <http://localhost:8000> and drop PDFs (try `sample-forms/registry/`). This runs
 **Tier A only** (Tesseract OCR): hard-to-read labels stay in "Needs review"
 instead of getting a second read.
 
@@ -84,10 +84,10 @@ files. The CSV/PDF export is the durable artifact.
 
 ```bash
 uv run pytest                                            # full suite
-uv run python -m server.pipeline.runner sample-forms/*.pdf            # corpus run, Tier A
-uv run python -m server.pipeline.runner sample-forms/*.pdf \
+uv run python -m server.pipeline.runner sample-forms/registry/*.pdf   # corpus run, Tier A
+uv run python -m server.pipeline.runner sample-forms/registry/*.pdf \
     --vision http://127.0.0.1:8090/v1                    # with Tier B
-uv run python -m server.pipeline.runner sample-forms/*.pdf --no-ocr   # parse/extract only
+uv run python -m server.pipeline.runner sample-forms/registry/*.pdf --no-ocr  # parse/extract only
 ```
 
 ## Docker

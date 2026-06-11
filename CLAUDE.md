@@ -15,13 +15,14 @@ COLA Proof: a local-first batch tool for TTB compliance agents. It ingests appro
 
 Other contents:
 
-- `sample-forms/` — 30 real COLA PDFs; the test corpus for every phase. Covers both form revisions and non-English imports.
+- `sample-forms/registry/` — 30 real COLA PDFs from the COLA Public Registry print view; the test corpus for every phase. Covers both form revisions and non-English imports.
+- `sample-forms/applications/` — 10 filled TTB F 5100.31 (04/2023) application PDFs, a different shape from the registry print view: legal-size, 5 pages (last 4 are static instructions), data as flat text on page 1 (AcroForm widgets hold only form furniture), label images affixed on page 1. Six have individual label images with typed FRONT/BACK/NECK captions; four embed a single uncaptioned photo of physical bottles. Not yet supported by the pipeline.
 - `cola-proof/` — empty accidental `git init` scaffold (zero commits). The plan says to remove it; build at repo root under `server/` and `web/`. The repo root is already a git repo — do not nest another.
 
 ## Planned stack & commands (from implementation-plan.md)
 
 - Python 3.12 via `uv` (system 3.14 is too new for some OCR/imaging wheels). Backend: FastAPI + uvicorn + SQLite. Tests: `uv run pytest`.
-- CLI corpus harness (phase 1): `python -m server.pipeline.runner sample-forms/*.pdf` — prints parsed fields, writes crops, must hold across all 30 samples.
+- CLI corpus harness (phase 1): `python -m server.pipeline.runner sample-forms/registry/*.pdf` — prints parsed fields, writes crops, must hold across all 30 samples.
 - `web/`: React + Vite + TypeScript + Tailwind (npm), built to static files served by FastAPI on a single port. Progressive results via SSE.
 - Local dev deps: `brew install tesseract tesseract-lang llama.cpp`.
 - Deploy: multi-stage Dockerfile → Railway (app service + llama.cpp sidecar, private networking only), with a mirroring `docker-compose.yml` for on-prem.

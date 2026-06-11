@@ -11,7 +11,7 @@ import pytest
 
 from server.pipeline.runner import process_pdf
 
-SAMPLES = sorted((Path(__file__).parent.parent / "sample-forms").glob("*.pdf"))
+SAMPLES = sorted((Path(__file__).parent.parent / "sample-forms" / "registry").glob("*.pdf"))
 
 
 @pytest.fixture(scope="session")

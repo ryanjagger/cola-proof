@@ -4,7 +4,7 @@ parse -> extract crops -> Tier A OCR -> match -> warning -> auto-status,
 plus the escalation signals that will route a record to Tier B (phase 6).
 Also the CLI corpus harness:
 
-    python -m server.pipeline.runner sample-forms/*.pdf [--out OUT_DIR] [--no-ocr]
+    python -m server.pipeline.runner sample-forms/registry/*.pdf [--out OUT_DIR] [--no-ocr]
 
 Escalation policy (spec): escalate on doubt, never reject on doubt. The
 signals are computed here even though Tier B is not wired yet, so the

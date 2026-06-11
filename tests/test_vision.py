@@ -356,7 +356,7 @@ def test_crops_are_reencoded_clean_before_sending():
 
     from server.pipeline.extract_labels import extract_labels
 
-    pdf = Path(__file__).parent.parent / "sample-forms" / "11115001000381.pdf"
+    pdf = Path(__file__).parent.parent / "sample-forms" / "registry" / "11115001000381.pdf"
     crop = extract_labels(fitz.open(pdf))[0]
     assert b"Photoshop" in crop.data  # the pathological original
 

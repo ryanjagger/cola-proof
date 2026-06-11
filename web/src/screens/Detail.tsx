@@ -9,7 +9,24 @@ import {
   type RecordRow,
   type Verdict,
 } from '../api'
-import { agentName, fieldLabel, setAgentName, verdictSentence, warningHeadline } from '../plain'
+import {
+  agentName,
+  devMode,
+  fieldLabel,
+  setAgentName,
+  setDevMode,
+  verdictSentence,
+  warningHeadline,
+} from '../plain'
+
+// Dev-only wording — deliberately not in plain.ts, agents never see it.
+const SOURCE_LABELS: Record<string, string> = {
+  ocr: 'tesseract',
+  vision: 'vision model',
+  form: 'form (container wording)',
+}
+
+const sourceLabel = (s?: string | null) => (s ? (SOURCE_LABELS[s] ?? s) : 'unknown')
 
 export default function Detail() {
   const { recordId } = useParams()
@@ -20,6 +37,7 @@ export default function Detail() {
   const [agent, setAgent] = useState(agentName())
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [dev, setDev] = useState(devMode())
 
   useEffect(() => {
     if (!recordId) return
@@ -89,6 +107,21 @@ export default function Detail() {
           >
             Record PDF
           </a>
+          <button
+            onClick={() => {
+              const next = !dev
+              setDevMode(next)
+              setDev(next)
+            }}
+            title="Show pipeline diagnostics (developer)"
+            className={`rounded-lg px-3 py-1.5 text-sm ring-1 ${
+              dev
+                ? 'bg-stone-900 text-white ring-stone-900'
+                : 'bg-white text-stone-400 ring-stone-200 hover:bg-stone-50'
+            }`}
+          >
+            Dev
+          </button>
           <AutoStatusBadge record={record} />
         </div>
       </header>
@@ -97,13 +130,14 @@ export default function Detail() {
         {/* Left: verdicts */}
         <section className="space-y-3">
           {(record.verdicts ?? []).map((v) => (
-            <VerdictCard key={v.field} verdict={v} />
+            <VerdictCard key={v.field} verdict={v} dev={dev} />
           ))}
-          <WarningCard record={record} />
+          <WarningCard record={record} dev={dev} />
+          {dev && <EscalationCard record={record} />}
         </section>
 
         {/* Right: crops */}
-        <CropViewer record={record} />
+        <CropViewer record={record} dev={dev} />
       </div>
 
       {/* Action bar */}
@@ -179,7 +213,7 @@ function outcomeStyle(v: Verdict): string {
   }
 }
 
-function VerdictCard({ verdict: v }: { verdict: Verdict }) {
+function VerdictCard({ verdict: v, dev }: { verdict: Verdict; dev: boolean }) {
   return (
     <div className={`rounded-xl border p-4 ${outcomeStyle(v)}`}>
       <div className="flex items-baseline justify-between">
@@ -202,11 +236,19 @@ function VerdictCard({ verdict: v }: { verdict: Verdict }) {
           </dd>
         </div>
       </dl>
+      {dev && (
+        <p className="mt-2 font-mono text-xs text-stone-500">
+          read by: {v.label_value ? sourceLabel(v.source) : '—'}
+          {v.source_crop != null && <> · crop {v.source_crop}</>}
+          {v.score != null && <> · score {v.score.toFixed(1)}</>}
+          {v.normalized && ' · normalized'}
+        </p>
+      )}
     </div>
   )
 }
 
-function WarningCard({ record }: { record: RecordRow }) {
+function WarningCard({ record, dev }: { record: RecordRow; dev: boolean }) {
   const w = record.warning
   const ok = w?.status === 'exact'
   return (
@@ -229,11 +271,38 @@ function WarningCard({ record }: { record: RecordRow }) {
         </p>
       )}
       {w?.note && <p className="mt-2 text-sm text-stone-600">{w.note}</p>}
+      {dev && w && (
+        <p className="mt-2 font-mono text-xs text-stone-500">
+          read by: {w.found_text ? sourceLabel(w.source) : '—'}
+          {w.source_crop != null && <> · crop {w.source_crop}</>}
+          {' · score '}
+          {w.score.toFixed(1)}
+        </p>
+      )}
     </div>
   )
 }
 
-function CropViewer({ record }: { record: RecordRow }) {
+function EscalationCard({ record }: { record: RecordRow }) {
+  return (
+    <div className="rounded-xl border border-stone-200 bg-stone-50/60 p-4">
+      <h3 className="text-xs font-medium uppercase tracking-wide text-stone-500">
+        Escalation reasons
+      </h3>
+      {record.escalation?.length ? (
+        <ul className="mt-2 space-y-1 font-mono text-xs text-stone-500">
+          {record.escalation.map((r, i) => (
+            <li key={i}>{r}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-xs text-stone-400">none — Tier A resolved everything</p>
+      )}
+    </div>
+  )
+}
+
+function CropViewer({ record, dev }: { record: RecordRow; dev: boolean }) {
   const crops = record.crops ?? []
   const [selected, setSelected] = useState<number | 'pdf'>(crops.length ? crops[0].index : 'pdf')
   const [zoom, setZoom] = useState(false)
@@ -281,13 +350,25 @@ function CropViewer({ record }: { record: RecordRow }) {
             PDF
           </button>
         </div>
-        <p className="text-xs text-stone-500">
-          {crop
-            ? `${crop.width_in}″ × ${crop.height_in}″ · click image to zoom`
-            : crops.length
-              ? 'the application as uploaded'
-              : 'no label images were found — showing the uploaded PDF'}
-        </p>
+        <div className="text-right">
+          <p className="text-xs text-stone-500">
+            {crop
+              ? `${crop.width_in}″ × ${crop.height_in}″ · click image to zoom`
+              : crops.length
+                ? 'the application as uploaded'
+                : 'no label images were found — showing the uploaded PDF'}
+          </p>
+          {dev && crop && (
+            <p className="mt-1 font-mono text-xs text-stone-400">
+              ocr conf {crop.ocr_conf ?? '—'} · {crop.dpi} dpi ·{' '}
+              {crop.vision_ok == null
+                ? 'tier B not run'
+                : crop.vision_ok
+                  ? `tier B ok ${crop.vision_ms}ms`
+                  : `tier B failed ${crop.vision_ms}ms${crop.vision_error ? ` (${crop.vision_error})` : ''}`}
+            </p>
+          )}
+        </div>
       </div>
     </section>
   )

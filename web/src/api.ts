@@ -1,5 +1,9 @@
 export type Outcome = 'exact' | 'near_miss' | 'mismatch' | 'missing'
 
+// Which reader produced a matched value; absent on records processed
+// before source attribution existed.
+export type VerdictSource = 'ocr' | 'vision' | 'form'
+
 export interface Verdict {
   field: string
   form_value: string | null
@@ -8,6 +12,8 @@ export interface Verdict {
   score: number | null
   normalized: boolean
   note: string | null
+  source?: VerdictSource | null
+  source_crop?: number | null
 }
 
 export interface WarningResult {
@@ -15,6 +21,8 @@ export interface WarningResult {
   found_text: string | null
   score: number
   note?: string | null // absent on records processed before notes existed
+  source?: VerdictSource | null
+  source_crop?: number | null
 }
 
 export interface Crop {
@@ -29,6 +37,10 @@ export interface Crop {
   ext: string
   filename: string
   ocr_conf: number | null
+  // Tier B audit trail; null when the crop wasn't re-read.
+  vision_ok?: boolean | null
+  vision_ms?: number | null
+  vision_error?: string | null
 }
 
 export interface FormFields {

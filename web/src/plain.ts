@@ -86,3 +86,13 @@ export function agentName(): string {
 export function setAgentName(name: string) {
   localStorage.setItem('cola-proof.agent', name)
 }
+
+// Developer diagnostics toggle — off by default so the agent-facing UI
+// stays plain-language with no scores.
+export function devMode(): boolean {
+  return localStorage.getItem('cola-proof.dev') === '1'
+}
+
+export function setDevMode(on: boolean) {
+  localStorage.setItem('cola-proof.dev', on ? '1' : '0')
+}

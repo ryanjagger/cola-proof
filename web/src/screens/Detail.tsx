@@ -38,12 +38,16 @@ export default function Detail() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dev, setDev] = useState(devMode())
+  // null = "no explicit choice yet": the viewer falls back to the first
+  // crop. Verdict cards set it so "crop N" refs select the crop they cite.
+  const [selectedCrop, setSelectedCrop] = useState<number | 'pdf' | null>(null)
 
   useEffect(() => {
     if (!recordId) return
     setNote('')
     setError(null)
     setSaving(false)
+    setSelectedCrop(null)
     getRecord(recordId).then((r) => {
       setRecord(r)
       setNote(r.note ?? '')
@@ -130,14 +134,19 @@ export default function Detail() {
         {/* Left: verdicts */}
         <section className="space-y-3">
           {(record.verdicts ?? []).map((v) => (
-            <VerdictCard key={v.field} verdict={v} dev={dev} />
+            <VerdictCard key={v.field} verdict={v} dev={dev} onShowCrop={setSelectedCrop} />
           ))}
-          <WarningCard record={record} dev={dev} />
+          <WarningCard record={record} dev={dev} onShowCrop={setSelectedCrop} />
           {dev && <EscalationCard record={record} />}
         </section>
 
         {/* Right: crops */}
-        <CropViewer record={record} dev={dev} />
+        <CropViewer
+          record={record}
+          dev={dev}
+          selected={selectedCrop}
+          onSelect={setSelectedCrop}
+        />
       </div>
 
       {/* Action bar */}
@@ -213,7 +222,27 @@ function outcomeStyle(v: Verdict): string {
   }
 }
 
-function VerdictCard({ verdict: v, dev }: { verdict: Verdict; dev: boolean }) {
+function CropRef({ index, onShowCrop }: { index: number; onShowCrop: (i: number) => void }) {
+  return (
+    <button
+      onClick={() => onShowCrop(index)}
+      title="Show this crop in the viewer"
+      className="underline decoration-dotted underline-offset-2 hover:text-stone-700"
+    >
+      crop {index}
+    </button>
+  )
+}
+
+function VerdictCard({
+  verdict: v,
+  dev,
+  onShowCrop,
+}: {
+  verdict: Verdict
+  dev: boolean
+  onShowCrop: (i: number) => void
+}) {
   return (
     <div className={`rounded-xl border p-4 ${outcomeStyle(v)}`}>
       <div className="flex items-baseline justify-between">
@@ -237,7 +266,9 @@ function VerdictCard({ verdict: v, dev }: { verdict: Verdict; dev: boolean }) {
           {dev && (
             <p className="mt-1 font-mono text-xs text-stone-500">
               {v.label_value ? sourceLabel(v.source) : '—'}
-              {v.source_crop != null && <> · crop {v.source_crop}</>}
+              {v.source_crop != null && (
+                <> · <CropRef index={v.source_crop} onShowCrop={onShowCrop} /></>
+              )}
               {v.score != null && <> · score {v.score.toFixed(1)}</>}
               {v.normalized && ' · normalized'}
             </p>
@@ -248,7 +279,15 @@ function VerdictCard({ verdict: v, dev }: { verdict: Verdict; dev: boolean }) {
   )
 }
 
-function WarningCard({ record, dev }: { record: RecordRow; dev: boolean }) {
+function WarningCard({
+  record,
+  dev,
+  onShowCrop,
+}: {
+  record: RecordRow
+  dev: boolean
+  onShowCrop: (i: number) => void
+}) {
   const w = record.warning
   const ok = w?.status === 'exact'
   return (
@@ -274,7 +313,9 @@ function WarningCard({ record, dev }: { record: RecordRow; dev: boolean }) {
       {dev && w && (
         <p className="mt-2 font-mono text-xs text-stone-500">
           read by: {w.found_text ? sourceLabel(w.source) : '—'}
-          {w.source_crop != null && <> · crop {w.source_crop}</>}
+          {w.source_crop != null && (
+            <> · <CropRef index={w.source_crop} onShowCrop={onShowCrop} /></>
+          )}
           {' · score '}
           {w.score.toFixed(1)}
         </p>
@@ -302,9 +343,19 @@ function EscalationCard({ record }: { record: RecordRow }) {
   )
 }
 
-function CropViewer({ record, dev }: { record: RecordRow; dev: boolean }) {
+function CropViewer({
+  record,
+  dev,
+  selected: selectedProp,
+  onSelect,
+}: {
+  record: RecordRow
+  dev: boolean
+  selected: number | 'pdf' | null
+  onSelect: (s: number | 'pdf') => void
+}) {
   const crops = record.crops ?? []
-  const [selected, setSelected] = useState<number | 'pdf'>(crops.length ? crops[0].index : 'pdf')
+  const selected = selectedProp ?? (crops.length ? crops[0].index : 'pdf')
   const [zoom, setZoom] = useState(false)
   const crop = selected === 'pdf' ? null : crops.find((c) => c.index === selected)
 
@@ -340,13 +391,14 @@ function CropViewer({ record, dev }: { record: RecordRow; dev: boolean }) {
           {crops.map((c) => (
             <button
               key={c.index}
-              onClick={() => setSelected(c.index)}
+              onClick={() => onSelect(c.index)}
               className={`capitalize ${buttonStyle(c.index === selected)}`}
             >
               {c.kind === 'other' ? c.caption_type.toLowerCase() : c.kind}
+              {dev && <span className="opacity-60"> · {c.index}</span>}
             </button>
           ))}
-          <button onClick={() => setSelected('pdf')} className={buttonStyle(selected === 'pdf')}>
+          <button onClick={() => onSelect('pdf')} className={buttonStyle(selected === 'pdf')}>
             PDF
           </button>
         </div>

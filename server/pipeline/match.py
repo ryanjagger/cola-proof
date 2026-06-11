@@ -116,6 +116,17 @@ def match_name(field: str, form_value: str, label_texts: list[str]) -> Verdict:
     src = best_src.source if best_src else None
     src_crop = best_src.crop_index if best_src else None
     if best_score >= EXACT_THRESHOLD:
+        if best_text and not scattered:
+            conflict = _conflicting_spelling(needle, sourced, best_text)
+            if conflict:
+                c_score, c_window, c_st = conflict
+                return Verdict(
+                    field, form_value, c_window, Outcome.NEAR_MISS, c_score,
+                    normalized,
+                    note=f'the label also shows "{best_text}" — '
+                    "two spellings of this name on the label",
+                    source=c_st.source, source_crop=c_st.crop_index,
+                )
         return Verdict(field, form_value, best_text, Outcome.EXACT, best_score,
                        normalized, note, src, src_crop)
     if best_score >= NEAR_THRESHOLD:
@@ -125,6 +136,48 @@ def match_name(field: str, form_value: str, label_texts: list[str]) -> Verdict:
     # and "unreadable label" are indistinguishable, so a name never
     # hard-fails on OCR — it reads as not-found and goes to review.
     return Verdict(field, form_value, None, Outcome.MISSING, best_score)
+
+
+def _conflicting_spelling(
+    needle: str, sourced: list[SourcedText], exact_text: str
+) -> tuple[float, str, SourcedText] | None:
+    """The form's spelling can appear on a label incidentally — the
+    company-name boilerplate ("BREWED AND CANNED BY GRANITE HARBOR
+    BREWING CO.") routinely repeats it — while the brand display itself
+    is spelled differently (GRANITE HARBOUR). An exact window therefore
+    isn't proof by itself: mask it out and look again. If any crop still
+    holds a near-but-not-exact variant, the label carries two spellings
+    of the name, and that is doubt to review, not a pass."""
+    best = None
+    flat_needle = needle.replace(" ", "")
+    for st in sourced:
+        hay = normalize_text(st.text)
+        if not hay:
+            continue
+        masked = hay.replace(exact_text, " ")
+        a = fuzz.partial_ratio_alignment(needle, masked)
+        if a is None:
+            continue
+        # The optimal alignment window can stop mid-word ("granite harbo"
+        # against HARBOUR); widen to word boundaries before showing it.
+        start, end = a.dest_start, a.dest_end
+        while start > 0 and masked[start - 1] != " ":
+            start -= 1
+        while end < len(masked) and masked[end] != " ":
+            end += 1
+        window = re.sub(r"\s+", " ", masked[start:end]).strip()
+        if not window or not (NEAR_THRESHOLD <= a.score < EXACT_THRESHOLD):
+            continue
+        # Same letters in a different layout are not a different spelling:
+        # script fonts OCR with words joined ("piscoviejotonel") and URLs
+        # strip spaces ("3steveswinery com") — only a genuinely different
+        # letter sequence (HARBOUR vs HARBOR) is a conflict.
+        flat_window = window.replace(" ", "")
+        if flat_needle in flat_window or flat_window in flat_needle:
+            continue
+        if best is None or a.score > best[0]:
+            best = (a.score, window, st)
+    return best
 
 
 # --- net contents ---------------------------------------------------------

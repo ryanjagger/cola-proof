@@ -1,4 +1,4 @@
-"""Corpus invariants over the 10 application-shape sample PDFs (the bare
+"""Corpus invariants over the 11 application-shape sample PDFs (the bare
 04/2023 fillable form, as opposed to the registry print view).
 
 Parse/extract invariants run on the real corpus like test_corpus does for
@@ -31,7 +31,7 @@ PHOTO = {
 
 @pytest.fixture(scope="session")
 def results():
-    assert len(SAMPLES) == 10, "expected the 10-PDF application corpus"
+    assert len(SAMPLES) == 11, "expected the 11-PDF application corpus"
     return {p.name: process_pdf(p) for p in SAMPLES}
 
 
@@ -124,6 +124,20 @@ def test_photo_never_passes_on_tier_a_alone(photo_record):
     evaluate(photo_record)
     assert photo_record.auto_status == "Needs Review"
     assert any("photograph" in r for r in photo_record.escalation_reasons)
+
+
+def test_brand_spelling_conflict_goes_to_review():
+    """06_graniteharbor (real Tier A run): the brand display on both
+    labels spells HARBOUR while the form — and the back label's
+    company-name boilerplate — spell HARBOR. The incidental exact in the
+    boilerplate must not mask the display spelling; the record reviews."""
+    path = next(p for p in SAMPLES if "graniteharbor" in p.name)
+    record = process_pdf(path, run_ocr=True)
+    brand = next(v for v in record.verdicts if v.field == "brand_name")
+    assert brand.outcome.value == "near_miss", (brand.outcome, brand.label_value)
+    assert "harbour" in (brand.label_value or ""), brand.label_value
+    assert record.auto_status == "Needs Review"
+    assert any("brand_name" in r for r in record.escalation_reasons)
 
 
 def test_photo_passes_once_vision_confirms(photo_record):

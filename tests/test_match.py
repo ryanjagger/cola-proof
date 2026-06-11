@@ -45,6 +45,36 @@ def test_match_name(form_value, label_text, expected):
     assert v.outcome == expected, (v.score, v.label_value)
 
 
+def test_match_name_two_spellings_is_review_not_pass():
+    """The company-name boilerplate can repeat the form's spelling while
+    the brand display spells the name differently; the incidental exact
+    must not mask the display's near-miss (the GRANITE HARBOUR trap)."""
+    v = match_name(
+        "brand_name",
+        "GRANITE HARBOR",
+        [
+            "GRANITE HARBOUR\nSEA STACK\nPORTER",
+            "GRANITE HARBOUR\nBREWED AND CANNED BY\nGRANITE HARBOR BREWING CO., LLC",
+        ],
+    )
+    assert v.outcome == Outcome.NEAR_MISS, (v.score, v.label_value)
+    assert v.label_value == "granite harbour"
+    assert "two spellings" in v.note
+
+
+def test_match_name_consistent_spelling_stays_exact():
+    """One spelling everywhere (display + boilerplate) is still a pass."""
+    v = match_name(
+        "brand_name",
+        "GRANITE HARBOR",
+        [
+            "GRANITE HARBOR\nSEA STACK\nPORTER",
+            "BREWED AND CANNED BY\nGRANITE HARBOR BREWING CO., LLC",
+        ],
+    )
+    assert v.outcome == Outcome.EXACT, (v.score, v.label_value)
+
+
 def test_match_name_searches_all_crops():
     v = match_name("brand_name", "OLD CARTER", ["nothing here", "Old Carter Whiskey"])
     assert v.outcome == Outcome.EXACT

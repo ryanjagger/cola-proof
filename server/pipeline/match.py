@@ -130,6 +130,7 @@ _UNIT_ML = {
 
 _NET_RE = re.compile(
     r"(\d+(?:[.,]\d+)?)\s*"
+    r"(?:u\.?\s*s\.?\s+)?"  # keg collars print "5.17 U.S. GALLONS"
     r"(milliliters?|millilitres?|centiliters?|liters?|litres?|"
     r"fl\.?\s*oz|fluid\s+ounces?|gallons?|barrels?|ml|cl|l)\b",
     re.IGNORECASE,

@@ -65,6 +65,10 @@ NET_PARSE_CASES = [
     ("75 cl", 750.0),
     ("12 FL. OZ", 12 * 29.5735),
     ("1/2 BARREL", 117348.0 / 2) if False else ("50 MILLILITERS", 50.0),
+    # keg collars state volume with a "U.S." infix
+    ("5.17 U.S. GALLONS", 5.17 * 3785.41),
+    ("15.5 US GALLONS", 15.5 * 3785.41),
+    ("12 U.S. FL. OZ", 12 * 29.5735),
     ("no volume here", None),
 ]
 
@@ -169,6 +173,12 @@ def test_format_checks_present_and_plausible():
     texts = ["Straight Bourbon Whiskey 750 ml Alc. 51.1% by Vol"]
     assert format_check_abv(texts).outcome == Outcome.EXACT
     assert format_check_net_contents(texts).outcome == Outcome.EXACT
+
+
+def test_format_check_net_contents_keg_collar():
+    v = format_check_net_contents(["15.5 U.S. GALLONS"])
+    assert v.outcome == Outcome.EXACT
+    assert v.label_value == "15.5 U.S. GALLONS"
 
 
 def test_format_checks_missing():

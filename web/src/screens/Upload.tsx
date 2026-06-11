@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { listBatches, uploadBatch, type Batch } from '../api'
+import { devMode, setDevMode } from '../plain'
 
 export default function Upload() {
   const navigate = useNavigate()
@@ -8,6 +9,7 @@ export default function Upload() {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [recent, setRecent] = useState<Batch[]>([])
+  const [dev, setDev] = useState(devMode())
 
   useEffect(() => {
     listBatches().then(setRecent).catch(() => {})
@@ -108,6 +110,22 @@ export default function Upload() {
           </ul>
         </section>
       )}
+
+      <button
+        onClick={() => {
+          const next = !dev
+          setDevMode(next)
+          setDev(next)
+        }}
+        title="Show pipeline diagnostics on record pages (developer)"
+        className={`fixed bottom-4 left-4 rounded-lg px-3 py-1.5 text-sm ring-1 ${
+          dev
+            ? 'bg-stone-900 text-white ring-stone-900'
+            : 'bg-white text-stone-400 ring-stone-200 hover:bg-stone-50'
+        }`}
+      >
+        Dev Mode
+      </button>
     </div>
   )
 }

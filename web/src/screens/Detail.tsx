@@ -15,7 +15,6 @@ import {
   devMode,
   fieldLabel,
   setAgentName,
-  setDevMode,
   verdictSentence,
   warningHeadline,
 } from '../plain'
@@ -44,7 +43,8 @@ export default function Detail() {
   const [agent, setAgent] = useState(agentName())
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [dev, setDev] = useState(devMode())
+  // Toggled from the upload page (bottom-left "Dev Mode"); read per visit.
+  const [dev] = useState(devMode())
   // null = "no explicit choice yet": the viewer falls back to the first
   // crop. Verdict cards set it so "crop N" refs select the crop they cite.
   const [selectedCrop, setSelectedCrop] = useState<number | 'pdf' | null>(null)
@@ -126,21 +126,6 @@ export default function Detail() {
           >
             Record PDF
           </a>
-          <button
-            onClick={() => {
-              const next = !dev
-              setDevMode(next)
-              setDev(next)
-            }}
-            title="Show pipeline diagnostics (developer)"
-            className={`rounded-lg px-3 py-1.5 text-sm ring-1 ${
-              dev
-                ? 'bg-stone-900 text-white ring-stone-900'
-                : 'bg-white text-stone-400 ring-stone-200 hover:bg-stone-50'
-            }`}
-          >
-            Dev
-          </button>
           <AutoStatusBadge record={record} />
         </div>
       </header>

@@ -1,5 +1,9 @@
-"""Corpus invariants over the 11 application-shape sample PDFs (the bare
-04/2023 fillable form, as opposed to the registry print view).
+"""Corpus invariants over the 18 application-shape sample PDFs (the bare
+04/2023 fillable form, as opposed to the registry print view): seven with
+label artwork affixed under typed captions (01-08), seven where the
+captioned images are photographs of the physical labels (11-17, including
+four irongate variants), and four where the labels arrive as one
+uncaptioned photograph of the labels laid out together (21-24, "-single").
 
 Parse/extract invariants run on the real corpus like test_corpus does for
 the registry shape. The photo-escalation policy (a photograph of the
@@ -22,16 +26,16 @@ SAMPLES = sorted(
 
 # Files whose labels are affixed as a single photograph of the containers.
 PHOTO = {
-    "TTB_F_5100-31_13_spirits_irongate_photo3.pdf",
-    "TTB_F_5100-31_15_beer_northpine_blackwater.pdf",
-    "TTB_F_5100-31_16_wine_laurelhills_pinot.pdf",
-    "TTB_F_5100-31_17_spirits_mariner_gin.pdf",
+    "TTB_F_5100-31_21_spirits_irongate_photo-single.pdf",
+    "TTB_F_5100-31_22_beer_northpine_blackwater-single.pdf",
+    "TTB_F_5100-31_23_wine_laurelhills_pinot-single.pdf",
+    "TTB_F_5100-31_24_spirits_mariner_gin-single.pdf",
 }
 
 
 @pytest.fixture(scope="session")
 def results():
-    assert len(SAMPLES) == 11, "expected the 11-PDF application corpus"
+    assert len(SAMPLES) == 18, "expected the 18-PDF application corpus"
     return {p.name: process_pdf(p) for p in SAMPLES}
 
 
@@ -73,8 +77,10 @@ def test_label_crops_classified(results):
             assert kinds == ["photo"], (name, kinds)
             assert r.crops[0].matchable, name
         else:
+            # Captioned records always carry front and back. One sample
+            # (16_pinot) additionally affixes its neck strip as an
+            # uncaptioned photo, so extra "photo" crops are legitimate.
             assert "front" in kinds and "back" in kinds, (name, kinds)
-            assert "photo" not in kinds, (name, kinds)
         for c in r.crops:
             assert c.dpi > 0, (name, c.index)
             assert c.aspect_ok, (name, c.index)

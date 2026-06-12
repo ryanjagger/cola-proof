@@ -5,6 +5,8 @@ application PDFs (form TTB F 5100.31), checks the embedded label images
 against the form's typed fields (brand, ABV, net contents, class/type,
 government warning), and flags mismatches for human review.
 
+Approach, tools used, and assumptions in brief: [APPROACH.md](APPROACH.md).
+
 ## Quick start (Docker)
 
 The only thing you need installed is

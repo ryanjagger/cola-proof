@@ -19,8 +19,8 @@ docker compose up --build
 ```
 
 Then open <http://localhost:8000> and drag in some PDFs — the repo ships
-ready-made test files in `sample-forms/registry/` and
-`sample-forms/applications/`.
+ready-made test files in [`sample-forms/registry/`](sample-forms/registry/) and
+[`sample-forms/applications/`](sample-forms/applications/).
 
 A few things to expect:
 

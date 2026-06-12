@@ -1,3 +1,13 @@
+import {
+  ArrowLeft,
+  Check,
+  CheckCircle,
+  CircleNotch,
+  FilePdf,
+  WarningCircle,
+  X,
+  XCircle,
+} from '@phosphor-icons/react'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
@@ -98,7 +108,13 @@ export default function Detail() {
     }
   }
 
-  if (!record) return <div className="p-10 text-stone-500">Loading…</div>
+  if (!record)
+    return (
+      <div className="flex items-center gap-2 p-10 text-stone-500">
+        <CircleNotch size={18} className="animate-spin" aria-hidden />
+        Loading…
+      </div>
+    )
 
   const form = record.form
 
@@ -106,8 +122,12 @@ export default function Detail() {
     <div className="mx-auto min-h-screen max-w-6xl px-6 py-8">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <Link to={`/batches/${record.batch_id}`} className="text-sm text-blue-700 hover:underline">
-            ← Back to batch
+          <Link
+            to={`/batches/${record.batch_id}`}
+            className="inline-flex items-center gap-1 text-sm text-blue-700 hover:underline"
+          >
+            <ArrowLeft size={14} aria-hidden />
+            Back to batch
           </Link>
           <h1 className="mt-1 text-xl font-semibold tracking-tight">
             {form?.brand_name ?? record.filename}
@@ -122,8 +142,9 @@ export default function Detail() {
         <div className="flex shrink-0 items-start gap-4">
           <a
             href={`/api/records/${record.id}/export.pdf`}
-            className="whitespace-nowrap rounded-lg bg-white px-3 py-1.5 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
+            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-white px-3 py-1.5 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
           >
+            <FilePdf size={15} aria-hidden />
             Record PDF
           </a>
           <AutoStatusBadge record={record} />
@@ -171,15 +192,17 @@ export default function Detail() {
           <button
             disabled={saving}
             onClick={() => act('Rejected')}
-            className="rounded-lg bg-red-600 px-5 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-5 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
           >
+            <X size={15} weight="bold" aria-hidden />
             Reject
           </button>
           <button
             disabled={saving}
             onClick={() => act('Approved')}
-            className="rounded-lg bg-green-600 px-5 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-5 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
           >
+            <Check size={15} weight="bold" aria-hidden />
             Approve
           </button>
         </div>
@@ -215,14 +238,19 @@ function AutoStatusBadge({ record }: { record: RecordRow }) {
         ? 'automatically'
         : `by ${record.dispositioned_by}`
     return (
-      <div className="text-right">
+      <div className="flex flex-col items-end text-right">
         <span
-          className={`whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium ${
+          className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium ${
             record.disposition === 'Approved'
               ? 'bg-green-100 text-green-800'
               : 'bg-red-100 text-red-800'
           }`}
         >
+          {record.disposition === 'Approved' ? (
+            <CheckCircle size={15} weight="fill" aria-hidden />
+          ) : (
+            <XCircle size={15} weight="fill" aria-hidden />
+          )}
           {record.disposition}
         </span>
         <p className="mt-1 text-xs text-stone-500">
@@ -243,9 +271,20 @@ function AutoStatusBadge({ record }: { record: RecordRow }) {
       : status === 'Fail'
         ? 'bg-red-100 text-red-800'
         : 'bg-amber-100 text-amber-800'
+  const icon =
+    status === 'Pass' ? (
+      <CheckCircle size={15} weight="fill" aria-hidden />
+    ) : status === 'Fail' ? (
+      <XCircle size={15} weight="fill" aria-hidden />
+    ) : (
+      <WarningCircle size={15} weight="fill" aria-hidden />
+    )
   return (
-    <div className="text-right">
-      <span className={`whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium ${style}`}>
+    <div className="flex flex-col items-end text-right">
+      <span
+        className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium ${style}`}
+      >
+        {icon}
         {status === 'Needs Review' ? 'Needs review' : status}
       </span>
       <p className="mt-1 text-xs text-stone-500">automatic check result · awaiting your call</p>
@@ -261,6 +300,17 @@ function outcomeStyle(v: Verdict): string {
       return 'border-red-300 bg-red-50/50'
     default:
       return 'border-amber-300 bg-amber-50/50'
+  }
+}
+
+function OutcomeIcon({ outcome }: { outcome: Verdict['outcome'] }) {
+  switch (outcome) {
+    case 'exact':
+      return <CheckCircle size={16} weight="fill" aria-hidden className="shrink-0 text-green-600" />
+    case 'mismatch':
+      return <XCircle size={16} weight="fill" aria-hidden className="shrink-0 text-red-600" />
+    default:
+      return <WarningCircle size={16} weight="fill" aria-hidden className="shrink-0 text-amber-600" />
   }
 }
 
@@ -308,7 +358,10 @@ function VerdictCard({
       }`}
     >
       <div className="flex items-baseline justify-between">
-        <h3 className="font-medium">{fieldLabel(v.field)}</h3>
+        <h3 className="flex items-center gap-1.5 font-medium">
+          <OutcomeIcon outcome={v.outcome} />
+          {fieldLabel(v.field)}
+        </h3>
         <span className="text-sm text-stone-600">{verdictSentence(v)}</span>
       </div>
       <dl className="mt-2 grid grid-cols-2 gap-3 text-sm">
@@ -369,7 +422,14 @@ function WarningCard({
       } ${clickable ? 'cursor-pointer transition-shadow hover:shadow' : ''}`}
     >
       <div className="flex items-baseline justify-between">
-        <h3 className="font-medium">Government warning</h3>
+        <h3 className="flex items-center gap-1.5 font-medium">
+          {ok ? (
+            <CheckCircle size={16} weight="fill" aria-hidden className="shrink-0 text-green-600" />
+          ) : (
+            <WarningCircle size={16} weight="fill" aria-hidden className="shrink-0 text-amber-600" />
+          )}
+          Government warning
+        </h3>
         <span className="text-sm text-stone-600">{warningHeadline(w)}</span>
       </div>
       {w?.found_text ? (

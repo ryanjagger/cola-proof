@@ -1,3 +1,16 @@
+import {
+  ArrowLeft,
+  CheckCircle,
+  CircleNotch,
+  Clock,
+  FileCsv,
+  FilePdf,
+  Sparkle,
+  TrashSimple,
+  WarningCircle,
+  WarningOctagon,
+  XCircle,
+} from '@phosphor-icons/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { listRecords, type BatchSummary, type RecordRow } from '../api'
@@ -98,8 +111,12 @@ export default function Batch() {
     <div className="mx-auto min-h-screen max-w-4xl px-6 py-8">
       <header className="mb-6 flex flex-wrap items-baseline justify-between gap-2">
         <div>
-          <Link to="/" className="text-sm text-blue-700 hover:underline">
-            ← Upload
+          <Link
+            to="/"
+            className="inline-flex items-center gap-1 text-sm text-blue-700 hover:underline"
+          >
+            <ArrowLeft size={14} aria-hidden />
+            Upload
           </Link>
           <h1 className="mt-1 text-xl font-semibold tracking-tight">Batch review</h1>
         </div>
@@ -148,14 +165,16 @@ export default function Batch() {
         <div className="flex flex-wrap items-center gap-2">
           <a
             href={`/api/batches/${batchId}/export.csv?scope=${filter}`}
-            className="whitespace-nowrap rounded-lg bg-white px-3 py-1 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
+            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-white px-3 py-1 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
           >
+            <FileCsv size={15} aria-hidden />
             Export CSV
           </a>
           <a
             href={`/api/batches/${batchId}/export.pdf?scope=${filter}`}
-            className="whitespace-nowrap rounded-lg bg-white px-3 py-1 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
+            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-white px-3 py-1 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
           >
+            <FilePdf size={15} aria-hidden />
             Export PDF
           </a>
           <button
@@ -169,8 +188,9 @@ export default function Batch() {
                 window.location.href = '/'
               }
             }}
-            className="whitespace-nowrap rounded-lg bg-white px-3 py-1 text-sm text-red-700 ring-1 ring-red-200 hover:bg-red-50"
+            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-white px-3 py-1 text-sm text-red-700 ring-1 ring-red-200 hover:bg-red-50"
           >
+            <TrashSimple size={15} aria-hidden />
             Delete
           </button>
         </div>
@@ -190,18 +210,39 @@ export default function Batch() {
   )
 }
 
-const CHIP = 'whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium'
+const CHIP =
+  'inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-medium'
 
 function VerdictPill({ status }: { status: string | null }) {
   switch (status) {
     case 'Fail':
-      return <span className={`${CHIP} bg-red-100 text-red-800`}>Fail</span>
+      return (
+        <span className={`${CHIP} bg-red-100 text-red-800`}>
+          <XCircle size={13} weight="fill" aria-hidden />
+          Fail
+        </span>
+      )
     case 'Needs Review':
-      return <span className={`${CHIP} bg-amber-100 text-amber-800`}>Needs review</span>
+      return (
+        <span className={`${CHIP} bg-amber-100 text-amber-800`}>
+          <WarningCircle size={13} weight="fill" aria-hidden />
+          Needs review
+        </span>
+      )
     case 'Pass':
-      return <span className={`${CHIP} bg-green-100 text-green-800`}>Pass</span>
+      return (
+        <span className={`${CHIP} bg-green-100 text-green-800`}>
+          <CheckCircle size={13} weight="fill" aria-hidden />
+          Pass
+        </span>
+      )
     default:
-      return <span className={`${CHIP} bg-stone-100 font-normal text-stone-500`}>Working…</span>
+      return (
+        <span className={`${CHIP} bg-stone-100 font-normal text-stone-500`}>
+          <CircleNotch size={13} className="animate-spin" aria-hidden />
+          Working…
+        </span>
+      )
   }
 }
 
@@ -219,14 +260,23 @@ function checksDisagreement(r: RecordRow): string | null {
 
 function RowStatus({ record: r }: { record: RecordRow }) {
   if (r.state === 'error')
-    return <span className={`${CHIP} bg-stone-200 text-stone-700`}>Couldn’t process</span>
+    return (
+      <span className={`${CHIP} bg-stone-200 text-stone-700`}>
+        <WarningOctagon size={13} weight="fill" aria-hidden />
+        Couldn’t process
+      </span>
+    )
   if (r.state === 'vision_queued')
     return (
-      <span className={`${CHIP} bg-stone-100 font-normal text-stone-500`}>Waiting…</span>
+      <span className={`${CHIP} bg-stone-100 font-normal text-stone-500`}>
+        <Clock size={13} aria-hidden />
+        Waiting…
+      </span>
     )
   if (r.state === 'vision_reading')
     return (
       <span className={`${CHIP} bg-stone-100 font-normal text-stone-500`}>
+        <Sparkle size={13} aria-hidden />
         Re-reading with AI…
       </span>
     )
@@ -257,6 +307,11 @@ function RowStatus({ record: r }: { record: RecordRow }) {
           r.disposition === 'Approved' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
         }`}
       >
+        {r.disposition === 'Approved' ? (
+          <CheckCircle size={13} weight="fill" aria-hidden />
+        ) : (
+          <XCircle size={13} weight="fill" aria-hidden />
+        )}
         {r.disposition}
       </span>
     </>

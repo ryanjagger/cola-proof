@@ -1,3 +1,10 @@
+import {
+  CaretRight,
+  CircleNotch,
+  FilePdf,
+  Terminal,
+  WarningCircle,
+} from '@phosphor-icons/react'
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { listBatches, uploadBatch, type Batch } from '../api'
@@ -73,15 +80,29 @@ export default function Upload() {
           onChange={(e) => e.target.files && submit(e.target.files)}
         />
         {uploading ? (
-          <p className="text-lg text-stone-600">Uploading…</p>
+          <p className="flex items-center gap-2 text-lg text-stone-600">
+            <CircleNotch size={20} className="animate-spin" aria-hidden />
+            Uploading…
+          </p>
         ) : (
           <>
-            <p className="text-lg font-medium">Drop PDFs here</p>
+            <FilePdf
+              size={40}
+              weight="duotone"
+              aria-hidden
+              className={dragging ? 'text-blue-500' : 'text-stone-400'}
+            />
+            <p className="mt-3 text-lg font-medium">Drop PDFs here</p>
             <p className="mt-1 text-sm text-stone-500">or click to choose files</p>
           </>
         )}
       </label>
-      {error && <p className="mt-4 text-sm text-red-700">{error}</p>}
+      {error && (
+        <p className="mt-4 flex items-center gap-1.5 text-sm text-red-700">
+          <WarningCircle size={16} weight="fill" aria-hidden className="shrink-0" />
+          {error}
+        </p>
+      )}
 
       {recent.length > 0 && (
         <section className="mt-12">
@@ -96,13 +117,14 @@ export default function Upload() {
                   className="flex items-center justify-between px-4 py-3 hover:bg-stone-50"
                 >
                   <span>{b.name}</span>
-                  <span className="text-sm text-stone-500">
+                  <span className="flex items-center gap-3 text-sm text-stone-500">
                     {b.summary
                       ? b.summary.complete
                         ? 'complete'
                         : `${b.summary.open} open`
                       : ''}
-                    <span className="ml-3">{new Date(b.created_at).toLocaleString()}</span>
+                    <span>{new Date(b.created_at).toLocaleString()}</span>
+                    <CaretRight size={14} aria-hidden className="text-stone-400" />
                   </span>
                 </Link>
               </li>
@@ -118,12 +140,13 @@ export default function Upload() {
           setDev(next)
         }}
         title="Show pipeline diagnostics on record pages (developer)"
-        className={`fixed bottom-4 left-4 rounded-lg px-3 py-1.5 text-sm ring-1 ${
+        className={`fixed bottom-4 left-4 inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm ring-1 ${
           dev
             ? 'bg-stone-900 text-white ring-stone-900'
             : 'bg-white text-stone-400 ring-stone-200 hover:bg-stone-50'
         }`}
       >
+        <Terminal size={14} aria-hidden />
         Dev Mode
       </button>
     </div>

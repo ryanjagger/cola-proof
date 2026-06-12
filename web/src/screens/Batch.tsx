@@ -115,7 +115,7 @@ export default function Batch() {
             className="inline-flex items-center gap-1 text-sm text-blue-700 hover:underline"
           >
             <ArrowLeft size={14} aria-hidden />
-            Upload
+            Home
           </Link>
           <h1 className="mt-1 text-xl font-semibold tracking-tight">Batch review</h1>
         </div>

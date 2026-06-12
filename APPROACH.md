@@ -101,6 +101,12 @@ harness runs the whole corpus at every phase so regressions surface immediately.
 - **Extend the vision model to account for bold GOVERNMENT WARNING text** — close the boldness gap
   noted under assumptions by asking the vision tier whether the prefix is rendered bold. Its answer
   would route a record to review, never decide compliance — the wording check stays deterministic.
+- **Flag undersized or buried warning text via the vision tier** — a known evasion tactic is
+  printing a word-perfect warning in tiny type, which the wording check alone can't catch. The
+  pipeline already knows each crop's physical size in inches (from its caption) and pixel
+  dimensions, so OCR word boxes give an estimated real-world text height; the vision tier could
+  corroborate "is the warning conspicuous and legible?". Either signal would route the record to
+  review for a human look — type-size compliance itself stays the agent's judgment.
 - **English-first OCR with a multi-language rescue** — Tier A loads all six language packs on
   every pass; `eng` alone measured ~3x faster per crop. A prototype that read domestic crops
   English-first kept every corpus decision unchanged only with a conservative rescue — any

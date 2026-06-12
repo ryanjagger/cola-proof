@@ -109,7 +109,7 @@ export default function Upload() {
           <h2 className="text-sm font-medium uppercase tracking-wide text-stone-500">
             Recent batches
           </h2>
-          <ul className="mt-3 divide-y divide-stone-200 rounded-xl border border-stone-200 bg-white">
+          <ul className="mt-3 divide-y divide-stone-200 overflow-hidden rounded-xl border border-stone-200 bg-white">
             {recent.map((b) => (
               <li key={b.id}>
                 <Link

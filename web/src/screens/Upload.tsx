@@ -93,7 +93,7 @@ export default function Upload() {
               className={dragging ? 'text-blue-500' : 'text-stone-400'}
             />
             <p className="mt-3 text-lg font-medium">Drop PDFs here</p>
-            <p className="mt-1 text-sm text-stone-500">or click to choose files</p>
+            <p className="mt-1 text-sm text-stone-500">to start a batch</p>
           </>
         )}
       </label>

@@ -3,7 +3,6 @@ import {
   CheckCircle,
   CircleNotch,
   Clock,
-  FileCsv,
   FilePdf,
   Sparkle,
   TrashSimple,
@@ -163,13 +162,6 @@ export default function Batch() {
           ))}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <a
-            href={`/api/batches/${batchId}/export.csv?scope=${filter}`}
-            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-white px-3 py-1 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
-          >
-            <FileCsv size={15} aria-hidden />
-            Export CSV
-          </a>
           <a
             href={`/api/batches/${batchId}/export.pdf?scope=${filter}`}
             className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-white px-3 py-1 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"

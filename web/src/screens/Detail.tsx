@@ -3,7 +3,6 @@ import {
   Check,
   CheckCircle,
   CircleNotch,
-  FilePdf,
   WarningCircle,
   X,
   XCircle,
@@ -140,13 +139,6 @@ export default function Detail() {
           </p>
         </div>
         <div className="flex shrink-0 items-start gap-4">
-          <a
-            href={`/api/records/${record.id}/export.pdf`}
-            className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg bg-white px-3 py-1.5 text-sm text-stone-700 ring-1 ring-stone-300 hover:bg-stone-50"
-          >
-            <FilePdf size={15} aria-hidden />
-            Record PDF
-          </a>
           <AutoStatusBadge record={record} />
         </div>
       </header>

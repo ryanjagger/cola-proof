@@ -1,9 +1,11 @@
-# COLA Proof — Architecture & Build Plan
+# COLA Proof — Architecture
 
 A standalone tool that helps TTB compliance agents verify that alcohol beverage labels match their
-COLA application data. Agents bulk-export approved applications (form TTB F 5100.31) from the COLA
-Registry as PDFs, import them into COLA Proof, and the tool checks each label image against the
-form fields — flagging mismatches for human review rather than making compliance determinations itself.
+COLA application data. Agents import COLA PDFs — registry print views of approved applications, or
+bare 04/2023 filings — and the tool checks each label image against the form fields, flagging
+mismatches for human review rather than making compliance determinations itself.
+
+This document describes the system as built. Section 7 records the build history.
 
 ---
 
@@ -33,24 +35,37 @@ These constraints come directly from the discovery interviews and drive every de
 
 ---
 
-## 2. Verified findings about the COLA export
+## 2. Verified findings about the COLA corpus
 
-These were checked against real sample PDFs, not assumed:
+Checked against the real sample corpus (30 registry + 18 application PDFs), and corrected where
+building proved early assumptions wrong:
 
-- **The form PDF has a real text layer.** Part I application fields are selectable text (~3,500
-  chars extracted cleanly), so field extraction is a *parsing* task, not OCR. Caveat: the two-column
-  form layout interleaves in reading order, so field-to-value mapping needs layout-aware parsing
-  (use word x/y coordinates and anchor on field-label boxes — not naive line-by-line).
-- **Label crops are identifiable by size and position.** A sample page had 12 embedded images:
-  nine ~20×22px checkbox glyphs, one ~193×49px signature, and two ~265×361px label crops in the
-  bottom third of the page. Filter to large images in the lower page region to isolate the labels;
-  discard the rest.
-- **Label crops are low-resolution** (~265px wide). The dense government warning on a back-label
-  crop at this size is the single hardest extraction target — this is the main justification for the
-  vision-model escalation tier.
-- **Labels are frequently non-English and multi-image.** Imports are common (Italian, Spanish, etc.),
-  and a record may carry front / back / neck images. Neck/embossed crops are often unreadable and
-  should be ignored for matching, not failed.
+- **The form PDF has a real text layer.** Part I fields are selectable text, so field extraction is
+  a *parsing* task, not OCR. The two-column layout interleaves in reading order, so parsing is
+  layout-aware (word x/y coordinates, anchored on field-label boxes).
+- **There are two PDF shapes, detected per record.** Registry print views of approved applications,
+  and bare 04/2023 fillable filings (legal-size, data as flat text on page 1, labels affixed on
+  page 1). Applications carry no TTB ID / status / class-type — nothing has been approved yet.
+- **There are four form revisions, not two** (6/2006, 5/2011, 07/2012, 06-2016). Field numbering
+  shifts between revisions, so the parser anchors on field *names*. Pre-2016 revisions carry typed
+  NET CONTENTS and ALCOHOL CONTENT fields; 06-2016 and the 04/2023 application drop them, so for
+  those records ABV/net-contents become label-format checks ("present and plausible") rather than
+  form-vs-label matches — and the UI says so.
+- **Label crops are identified by their captions, not by size or position.** Registry pages pair
+  each label image with an "Image Type: … Actual Dimensions: …" caption block, strictly in document
+  order (captions and images can straddle page boundaries, so pairing runs over the whole document).
+  Applications type a one-word FRONT/BACK/NECK caption under each image. Caption inches ÷ pixel
+  dimensions give an effective DPI per crop (observed ~90–506) — a free trust signal for escalation.
+- **Labels arrive in three affixing styles** (all present in the application corpus): label artwork
+  under captions; captioned *photographs* of the physical labels; and a single uncaptioned
+  photograph of all the labels laid out together, which becomes crop kind `photo` — always escalated
+  to the vision tier, never auto-Passed on local OCR alone.
+- **Labels are frequently non-English and multi-image.** Imports are common (Italian, Spanish,
+  etc.), and a record may carry front / back / neck images. Neck and strip crops are excluded from
+  name matching (stray text could false-match a short brand) but are still read for the numeric,
+  bottler, origin, and warning checks, which routinely live there.
+- **Corpus quirks the code handles:** one PNG label among the JPEGs, a record with two front crops,
+  and a record carrying both a source field and a net-contents field.
 
 ---
 
@@ -59,18 +74,20 @@ These were checked against real sample PDFs, not assumed:
 ```
 PDF in
   │
-  ├─ 1. Parse text layer ──────────► Part I form fields (deterministic, layout-aware)
+  ├─ 1. Detect shape ──────────────► registry print view | bare 04/2023 application
   │
-  ├─ 2. Extract label crops ───────► large bottom-of-page images (discard chrome/signature/neck)
+  ├─ 2. Parse text layer ──────────► Part I form fields (deterministic, layout-aware, per-revision)
   │
-  ├─ 3. Extract label text ────────► Tier A: local OCR (fast path)
+  ├─ 3. Extract label crops ───────► caption-paired; kind front / back / other / photo
+  │
+  ├─ 4. Extract label text ────────► Tier A: local OCR (fast path)
   │                                   Tier B: vision model (escalation — see triggers below)
   │
-  ├─ 4. Normalize + match ─────────► field-aware comparison (units, %, accents, casing)
+  ├─ 5. Normalize + match ─────────► field-aware comparison (units, %, accents, casing,
+  │                                   bottler, origin)
+  ├─ 6. Validate warning ──────────► strict, deterministic, across all crops
   │
-  ├─ 5. Validate warning ──────────► strict, deterministic, across all crops
-  │
-  └─ 6. Emit record result ────────► auto-status + per-field verdicts + crops
+  └─ 7. Emit record result ────────► auto-status + per-field verdicts + crops
 ```
 
 ### Three-tier extraction
@@ -79,10 +96,12 @@ The two extractor tiers feed one deterministic validator. Keeping the warning ch
 regardless of which tier produced the text — is essential: a rejection has to be explainable to an
 agent, and an LLM can't be the thing that decides exact-match compliance.
 
-1. **Tier A — local OCR (fast path).** Tesseract or PaddleOCR on each (upscaled) crop. Handles the
-   bulk at speed, no network.
-2. **Tier B — vision model (escalation).** Self-hosted vision-language model, invoked only when the
-   fast path is untrustworthy. Better on low-res / skewed / stylized crops.
+1. **Tier A — local OCR (fast path).** Tesseract on each (upscaled) crop, keeping per-word
+   confidences and word boxes. Handles the bulk at speed, no network.
+2. **Tier B — vision model (escalation).** Qwen3-VL-4B (GGUF, Q4_K_M) served by a llama.cpp
+   sidecar, reached through an OpenAI-compatible client at a configurable base URL. Invoked only
+   when the fast path is untrustworthy; runs as a bounded background queue because the CPU model is
+   slow, while the rest of the batch keeps streaming.
 3. **Warning validator (deterministic).** Pure string/format check on whatever text the tiers
    produced. Verifies presence, exact wording, all-caps "GOVERNMENT WARNING:".
 
@@ -94,9 +113,19 @@ speed win) or nothing (shipping OCR errors). Escalate when:
 - OCR per-word confidence falls below a threshold on a crop, **or**
 - a required field comes back empty/malformed (no ABV pattern, no net-contents pattern), **or**
 - the government warning is *almost* but not exactly matched — escalate before flagging, because a
-  false reject is worse than a slow review.
+  false reject is worse than a slow review, **or**
+- any field would be flagged MISMATCH — flag only after the best available reader agrees, **or**
+- the labels arrived as a photograph (`photo` crops always get the backup reader).
 
 Principle: **escalate on doubt, never reject on doubt.**
+
+### Vision corroboration rules
+
+A vision-language model can fabricate memorized-boilerplate-shaped text wholesale — the statutory
+warning, "BOTTLED BY …" lines, "PRODUCT OF …" statements. Vision-only readings of those count only
+when Tier A independently saw something similar enough; an uncorroborated vision-only "exact"
+warning demotes to review rather than auto-passing, and vision-only mismatches/presence claims
+demote the same way. The vision tier can rescue records, never quietly decide them.
 
 ### Field normalization rules
 
@@ -108,8 +137,13 @@ The form and label express the same fact differently; normalize before comparing
 | Alcohol content | `42` or `42%` | `Alc. 42% by Vol` | extract numeric %, tolerate surrounding text |
 | Brand name | `VIJO TONEL` | `Viejo Tonel` | case/punct/accent-insensitive; near-miss → review |
 | Type/class | `OTHER GRAPE BRANDY` | `PISCO` | map against class/type description; non-English aware |
+| Bottler | applicant name + address block | `BOTTLED BY NORTH HARBOR DISTILLING CO.` | company-name match near a bottled/produced-by statement; corporate suffixes stripped; city/state validated |
+| Country of origin | `Source: Imported` | `PRODUCT OF ITALY` | presence/format check; ambiguous country names (TURKEY, GEORGIA, …) require a product-of / imported-from anchor |
 
 Match outcomes are three-valued: **exact match**, **near-miss (review)**, **mismatch (fail)**.
+The bottler and origin checks never produce a mismatch — at worst they hold a record in review.
+Where the form has no typed value (06-2016 and applications), net contents and ABV are checked for
+presence and plausibility on the label instead.
 
 ---
 
@@ -143,80 +177,67 @@ Rules:
 
 ## 5. UI
 
-Four screens. The whole UX thesis: *stop making the agent eyeball the easy 80%.*
+Three screens. The whole UX thesis: *stop making the agent eyeball the easy 80%.*
 
 **Upload.** One obvious drop zone; drag a stack of PDFs. One action, impossible to miss.
 
-**Progress.** Records stream results as they finish rather than blocking on a spinner — this is how
-batch *feels* fast even when total wall-clock is minutes. The agent can start triaging early failures
-while the rest process.
-
-**Queue.** Show-all, sorted `Fail → Needs Review → Pass`. Summary bar up top
-("212 processed · 7 failed · 14 need review · 21 open") doubling as a progress meter. Fail/review
-rows are full-height with a plain-language reason; passes collapse to quiet green rows (present, so
-nothing looks hidden, but visually receding). Filter chips reuse one vocabulary: All / Open / Failed
-/ Needs review / Passed.
+**Batch.** Progress and queue are one screen: records stream results over SSE as they finish rather
+than blocking on a spinner — this is how batch *feels* fast even when total wall-clock is minutes,
+and the agent can start triaging early flags while the rest process. A summary bar up top doubles
+as the progress meter. Rows sort worst-first (`Fail → error → Needs Review → Pass`), open records
+before decided ones. Filters come in two families sharing one bar: **To review** is workflow state
+(no decision yet); **Flagged / Failed / Passed** are what the checks concluded, regardless of any
+decision since. Flagged and failed rows are full-height with a plain-language reason; passes
+collapse to quiet green rows (present, so nothing looks hidden, but visually receding).
 
 **Detail / review.** The core screen. Side-by-side: per-field verdicts on the left (form value vs
 extracted value, plain-language result, "(normalized)" tag where relevant), the actual label crop on
-the right with zoom. The agent verifies the claim against the pixels in one glance — never trusts OCR
-blindly. The government warning gets its own block showing the extracted text; if OCR couldn't read
-it, it says so honestly ("couldn't read clearly — please verify") rather than guessing. Approve /
-Reject + optional note at the bottom; acting advances to the next open record.
+the right with zoom and a highlight box on the words the value was read from. The agent verifies the
+claim against the pixels in one glance — never trusts OCR blindly. The government warning gets its
+own block showing the extracted text; if it couldn't be read, it says so honestly ("couldn't read
+clearly — please verify") rather than guessing. Approve / Reject + optional note at the bottom;
+acting advances to the next open record.
 
 Design principles throughout: plain language over confidence scores (numbers drive routing under the
 hood, not the agent's screen); three status states only; always show the crop next to the claim.
 
 ---
 
-## 6. Data lifecycle & the two open questions
+## 6. Data lifecycle & export
 
-**Lifecycle.** Source PDFs and extracted images are held only for the working session. The durable
-artifact is the **export**: the agent's dispositions, reasons, and audit trail. After export, source
-data can be purged. This satisfies the prototype's "don't store anything sensitive" posture and gives
-a clean story: sensitive data is session-scoped; the audit trail is what persists, by being exported.
-A lightweight store (SQLite or per-batch JSON) holds decision metadata only.
+**Lifecycle.** Source PDFs and extracted images are held only for the working session, in a
+per-batch media directory purged on batch delete. SQLite holds decision metadata only. The durable
+artifact is the **export**: the agent's dispositions, reasons, and audit trail.
 
-**Export.** Both formats, agent picks scope (reusing the queue filter vocabulary), two separate
-downloads (not bundled):
-- **CSV** — one row per record, text-only. TTB ID, brand, type, source, auto-status, disposition,
-  `dispositioned_by`, per-field results, timestamp, note. Preserves the auto-status vs disposition
-  split as separate columns so disagreements are filterable.
-- **PDF** — human-readable report. Batch summary, then per-record sections; for flagged records,
-  embeds the crop next to the verdict (the images' last legitimate use before purge).
-- Available **batch-level** (primary) and **per-record** (a single-record PDF button on the detail
-  view, for "send this one back to the importer with evidence").
+**Export.** The UI exposes one export: **CSV** ("Save Results"), scoped by the active queue filter —
+one row per record with TTB ID, brand, type, source, auto-status, disposition, `dispositioned_by`,
+per-field results, timestamp, and note. The auto-status vs disposition split stays as separate
+columns so disagreements are filterable. PDF report endpoints (batch-level and per-record, with the
+label crop embedded next to the verdict) exist in the API but were dropped from the UI to keep it
+to one obvious action.
 
-### Two open questions (the only things left to decide)
+### Latency posture (the two questions the design left open, since resolved)
 
-1. **What is the actual self-hosted vision-model runtime in the build/deploy environment?** This sets
-   the real latency budget for Tier B and confirms the no-network posture holds. It's the one
-   undecided choice that could change the escalation design.
-2. **Confirm "5 seconds" means fast-path median, not a hard per-record ceiling.** A record that
-   escalates to Tier B may exceed 5s; that's acceptable because progressive-fill keeps the agent
-   working other rows. Naming this explicitly so it's a stated assumption, not a silent one.
-
-Everything else (language/framework, OCR engine choice, storage backend) is a mechanical pick, not an
-architectural decision — any reasonable choice works and is best settled by building and measuring.
+1. **Vision runtime:** a self-hosted llama.cpp `llama-server` sidecar running Qwen3-VL-4B — Docker
+   compose locally/on-prem, a private-network sidecar service in production. No outbound inference
+   anywhere; the app reaches whatever endpoint `VISION_BASE_URL` names.
+2. **"5 seconds" is the fast-path median, not a per-record ceiling.** Tier A runs ~4–5s per record;
+   an escalated record waits on a ~6–12s-per-crop CPU vision read in a bounded background queue.
+   Progressive fill keeps the agent triaging other rows while escalations drain, which is what the
+   constraint actually required.
 
 ---
 
-## 7. Suggested build phases
+## 7. Build history
 
-Incremental, each phase independently demonstrable:
+Built in the phased order the original plan suggested, each phase demonstrable on the real corpus:
+ingest & parse → match engine (on known-good text, before any model work) → Tier A OCR → status +
+disposition store → UI → Tier B escalation (last, because its triggers depend on the fast path's
+trust signals) → export → Docker packaging and deployment (multi-stage Dockerfile; compose for
+on-prem; Railway app + vision sidecar in production).
 
-1. **Ingest & parse.** PDF in → Part I fields parsed (layout-aware) + label crops extracted by
-   size/position. Prove the verified findings hold across more samples.
-2. **Match engine.** Field normalization + three-valued matching + deterministic warning validator,
-   running on the parsed fields. No OCR yet — feed it known-good text to test the matching logic in
-   isolation.
-3. **Tier A extraction.** Local OCR on crops feeding the match engine. End-to-end on easy labels.
-4. **Status + disposition model.** The state machine, the separate auto-status/disposition fields,
-   the lightweight store.
-5. **UI.** Upload → progress (progressive-fill) → queue → detail/review, wired to the pipeline.
-6. **Tier B escalation.** Add the vision model and the escalation triggers once the fast path and
-   the trust signals (confidence, missing fields) are in place to drive it.
-7. **Export.** CSV + PDF, scope picker, batch + per-record.
-
-Phases 1–2 de-risk the core (parsing + matching) before any model work; phase 6 is deliberately late
-because the escalation triggers depend on having the fast path's confidence signals first.
+Notable decisions along the way: Tesseract won the Tier A slot (per-word confidences are the
+escalation signal); the Tier B model moved from Qwen2.5-VL to Qwen3-VL-4B after an A/B over the full
+corpus (fixed a false Fail and a false Pass); the vision corroboration rules (§3) were added after
+observing the model parrot prompt examples and fabricate memorized boilerplate; bottler and
+country-of-origin checks were added once the core five fields were stable.

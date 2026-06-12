@@ -1,15 +1,43 @@
 # COLA Proof
 
-A local-first batch tool for TTB compliance agents. It ingests approved COLA
+A local-first batch tool for TTB compliance agents. It ingests COLA
 application PDFs (form TTB F 5100.31), checks the embedded label images
 against the form's typed fields (brand, ABV, net contents, class/type,
-government warning), and flags mismatches for human review. It never makes
-compliance determinations itself — a "Fail" is a recommendation the agent
-confirms.
+government warning), and flags mismatches for human review.
 
-Design and architecture: see `cola-proof-spec.md` and `implementation-plan.md`.
+## Quick start (Docker)
 
-## Prerequisites
+The only thing you need installed is
+[Docker Desktop](https://www.docker.com/products/docker-desktop/).
+
+```bash
+git clone https://github.com/ryanjagger/cola-proof
+cd cola-proof
+docker compose up --build
+```
+
+Then open <http://localhost:8000> and drag in some PDFs — the repo ships
+ready-made test files in `sample-forms/registry/` and
+`sample-forms/applications/`.
+
+A few things to expect:
+
+- **The first start downloads ~3 GB of AI model weights** (one time; they're
+  cached afterwards). The app itself is up within seconds — until the
+  download finishes, hard-to-read labels simply wait in "Needs review"
+  instead of getting their AI re-read.
+- **Everything runs on your machine.** The AI model is served from a second
+  container that is reachable only from the app — it has no published port,
+  and nothing sends label data to an outside service.
+- Stop with `Ctrl-C` (or `docker compose down`). Uploaded batches persist in
+  a Docker volume between runs; `docker compose down -v` wipes them. The CSV
+  export is the durable record of a review session.
+
+## Running without Docker
+
+The secondary path: install the toolchain and run the pieces yourself.
+
+**Prerequisites**
 
 - [uv](https://docs.astral.sh/uv/) (manages Python 3.12 and dependencies)
 - Node 20+ / npm (frontend build)
@@ -19,28 +47,25 @@ Design and architecture: see `cola-proof-spec.md` and `implementation-plan.md`.
 brew install tesseract tesseract-lang llama.cpp
 ```
 
-## Setup (one time)
+**One-time setup**
 
 ```bash
 uv sync                                  # python deps into .venv
 cd web && npm install && npm run build   # build the SPA into web/dist
 ```
 
-## Running locally
-
-### 1. Python server (serves the API and the built frontend)
+**Run the server**
 
 ```bash
 DATA_DIR=data uv run uvicorn server.app:app --port 8000
 ```
 
-Open <http://localhost:8000> and drop PDFs (try `sample-forms/registry/`). This runs
-**Tier A only** (Tesseract OCR): hard-to-read labels stay in "Needs review"
-instead of getting a second read.
+Open <http://localhost:8000>. This runs the local OCR tier only: hard-to-read
+labels stay in "Needs review" instead of getting a second read.
 
-### 2. Vision tier (optional, recommended)
+**Vision tier (optional, recommended)**
 
-Tier B re-reads doubtful labels with a self-hosted vision model. Start the
+The vision tier re-reads doubtful labels with a self-hosted model. Start the
 sidecar (first run downloads ~3 GB of model weights, then they're cached):
 
 ```bash
@@ -54,7 +79,11 @@ DATA_DIR=data VISION_BASE_URL=http://127.0.0.1:8090/v1 \
   uv run uvicorn server.app:app --port 8000
 ```
 
-### 3. Web dev server (only for frontend work)
+## Developing
+
+Design and architecture: see `cola-proof-spec.md`.
+
+### Web dev server (only for frontend work)
 
 For hot reload instead of the static build:
 
@@ -67,7 +96,18 @@ server on :8000 (which must be running). For everything else, the built SPA
 served by FastAPI on :8000 is all you need — rebuild with `npm run build`
 after frontend changes.
 
-## Environment variables
+### Tests and the CLI harness
+
+```bash
+uv run pytest                                            # full suite
+uv run python -m server.pipeline.runner sample-forms/registry/*.pdf   # corpus run, Tier A
+uv run python -m server.pipeline.runner sample-forms/applications/*.pdf  # 04/2023 fillable-form corpus
+uv run python -m server.pipeline.runner sample-forms/registry/*.pdf \
+    --vision http://127.0.0.1:8090/v1                    # with Tier B
+uv run python -m server.pipeline.runner sample-forms/registry/*.pdf --no-ocr  # parse/extract only
+```
+
+### Environment variables
 
 | Variable          | Default        | Purpose                                            |
 | ----------------- | -------------- | -------------------------------------------------- |
@@ -80,20 +120,6 @@ after frontend changes.
 Uploaded PDFs and crops are session-scoped: deleting a batch purges its
 files. The CSV/PDF export is the durable artifact.
 
-## Tests and the CLI harness
-
-```bash
-uv run pytest                                            # full suite
-uv run python -m server.pipeline.runner sample-forms/registry/*.pdf   # corpus run, Tier A
-uv run python -m server.pipeline.runner sample-forms/applications/*.pdf  # 04/2023 fillable-form corpus
-uv run python -m server.pipeline.runner sample-forms/registry/*.pdf \
-    --vision http://127.0.0.1:8090/v1                    # with Tier B
-uv run python -m server.pipeline.runner sample-forms/registry/*.pdf --no-ocr  # parse/extract only
-```
-
-## Docker
-
-`docker compose up` runs the same two-service topology used in production
-(app + llama.cpp vision sidecar on a private network, model weights cached
-on a named volume). App on <http://localhost:8000>; the vision service has
-no published port on purpose.
+`docker compose up` mirrors the production topology: app + llama.cpp vision
+sidecar on a private network, model weights cached on a named volume, no
+outbound inference anywhere.

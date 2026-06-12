@@ -56,6 +56,27 @@ def _prepare(data: bytes, dpi: int | None) -> Image.Image:
     return img
 
 
+def _assemble_text(data: dict) -> str:
+    """Rebuild line-structured text from image_to_data word rows.
+
+    Newlines at line boundaries matter: warning.py de-hyphenates across
+    `-\\n` joins, so lines must not collapse into one space-joined blob.
+    """
+    lines: list[list[str]] = []
+    current_line = None
+    for w, c, line_key in zip(
+        data["text"], data["conf"],
+        zip(data["block_num"], data["par_num"], data["line_num"]),
+    ):
+        if not w.strip() or float(c) < 0:
+            continue
+        if line_key != current_line:
+            current_line = line_key
+            lines.append([])
+        lines[-1].append(w)
+    return "\n".join(" ".join(line) for line in lines)
+
+
 def _run(
     img: Image.Image,
 ) -> tuple[str, list[tuple[str, float]], list[tuple[float, float, float, float]]]:
@@ -78,8 +99,7 @@ def _run(
             round((x + bw) / img.width, 4),
             round((y + bh) / img.height, 4),
         ))
-    text = pytesseract.image_to_string(img, lang=LANGS)
-    return text.strip(), words, boxes
+    return _assemble_text(data), words, boxes
 
 
 def _stats(words: list[tuple[str, float]]) -> tuple[float, float]:

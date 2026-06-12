@@ -101,3 +101,11 @@ harness runs the whole corpus at every phase so regressions surface immediately.
 - **Extend the vision model to account for bold GOVERNMENT WARNING text** — close the boldness gap
   noted under assumptions by asking the vision tier whether the prefix is rendered bold. Its answer
   would route a record to review, never decide compliance — the wording check stays deterministic.
+- **English-first OCR with a multi-language rescue** — Tier A loads all six language packs on
+  every pass; `eng` alone measured ~3x faster per crop. A prototype that read domestic crops
+  English-first kept every corpus decision unchanged only with a conservative rescue — any
+  escalation-worthy doubt re-reads the record's crops with the full pack, so nothing is flagged
+  on a confident English misread (one-character warning misreads and "IRON GATE"→"tron gate"
+  both occurred). That trade makes clean-Pass records ~3x faster but review-heavy batches ~15%
+  slower, so it was shelved; worth revisiting against real production traffic, where routine
+  clean records should dominate.

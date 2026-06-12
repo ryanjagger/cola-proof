@@ -269,7 +269,7 @@ function RowStatus({ record: r }: { record: RecordRow }) {
     return (
       <span className={`${CHIP} bg-stone-100 font-normal text-stone-500`}>
         <Sparkle size={13} aria-hidden />
-        Re-reading with AI…
+        Reading with AI…
       </span>
     )
   if (r.state !== 'done') return <VerdictPill status={null} />
